@@ -101,6 +101,26 @@
         vscodeApi.postMessage({ command: 'generateClaudeDiagram', payload: { prompt: promptText } });
       }
 
+      function openMermaidDisplayWebview() {
+        const mermaidCode = document.getElementById('claudeDiagramTextarea').value;
+        const promptText = document.getElementById('mermaidDiagramPrompt').value;
+        const progressStatusDiv = document.getElementById('progressStatus');
+
+        if (!mermaidCode || mermaidCode.trim() === '') {
+          const errorMsg = 'Error: No Mermaid diagram content to display. Please generate a diagram first.';
+          if(progressStatusDiv) progressStatusDiv.textContent = errorMsg;
+          return;
+        }
+        if(progressStatusDiv) progressStatusDiv.textContent = 'Opening Mermaid diagram in new view...';
+        vscodeApi.postMessage({
+          command: 'openMermaidDisplay',
+          payload: {
+            mermaidCode: mermaidCode,
+            promptText: promptText
+          }
+        });
+      }
+
       window.addEventListener('message', event => {
         const message = event.data;
         const progressStatusDiv = document.getElementById('progressStatus');
@@ -192,6 +212,9 @@
     <div id="loadingSpinnerClaude" class="spinner" style="display:none;"></div>
     <br>
     <textarea id="claudeDiagramTextarea" style="height:300px;" readonly placeholder="Claude AI generated Mermaid diagram (from the prompt above) will appear here."></textarea>
+    <br><br>
+
+    <button onclick="openMermaidDisplayWebview()">View Mermaid Diagram in New Webview</button>
     <br><br>
 
     <h3>Progress Status:</h3>

@@ -169,6 +169,24 @@ function activate(context) {
                 }
               }
               return;
+            case 'openMermaidDisplay': // New case for opening the Mermaid display webview
+              try {
+                const { mermaidCode, promptText } = message.payload;
+                const displayPanel = vscode.window.createWebviewPanel(
+                  'mermaidDisplay',
+                  'Mermaid Diagram Display',
+                  vscode.ViewColumn.Beside, // Open in a new column
+                  {
+                    enableScripts: true,
+                    localResourceRoots: [vscode.Uri.file(path.join(context.extensionPath, 'media'))]
+                  }
+                );
+                displayPanel.webview.html = getMermaidDisplayWebviewContent(mermaidCode, promptText, context, displayPanel.webview);
+              } catch (e) {
+                console.error('Error opening Mermaid display webview:', e);
+                vscode.window.showErrorMessage('Error opening Mermaid display webview. Check console for details.');
+              }
+              return;
           }
         },
         undefined,
@@ -670,6 +688,26 @@ function getWebviewContent(body) {
 }
 
 /**
+ * Loads and processes the webview HTML template for displaying the Mermaid diagram.
+ * @param {string} mermaidCode The Mermaid sequence diagram code to insert.
+ * @param {string} promptText The prompt used to generate the diagram.
+ * @param {vscode.ExtensionContext} context The extension context.
+ * @param {vscode.Webview} webview The webview instance to get the CSP source from.
+ * @returns {string} The processed HTML content.
+ */
+function getMermaidDisplayWebviewContent(mermaidCode, promptText, context, webview) {
+  const templatePath = vscode.Uri.joinPath(context.extensionUri, 'media', 'mermaidDisplayWebview.html');
+  const templateContent = fs.readFileSync(templatePath.fsPath, 'utf8');
+  const nonce = getNonce(); // Helper function to generate nonce for CSP if needed, or manage CSP directly
+  const cspSource = webview.cspSource;
+
+  return templateContent
+    .replace(/\${mermaidCode}/g, mermaidCode)
+    .replace(/\${promptText}/g, promptText || 'No prompt available')
+    .replace(/\${cspSource}/g, cspSource);
+}
+
+/**
  * Convert SSH or Git URLs to HTTPS
  * @param {string} url
  */
@@ -677,9 +715,9 @@ function toHTTPS(url) {
   if (url.startsWith('git@')) {
     const [, hostPath] = url.split('@');
     const [host, repo] = hostPath.split(':');
-    return `https://${host}/${repo.replace(/\\.git$/, '')}`;
+    return `https://${host}/${repo.replace(/\.git$/, '')}`;
   }
-  return url.replace(/\\.git$/, '');
+  return url.replace(/\.git$/, '');
 }
 
 /**
@@ -751,6 +789,16 @@ async function getClassInformation(uri, className) {
   }
 }
 
+// Helper function to generate a nonce (if you choose to use nonces for CSP)
+function getNonce() {
+  let text = '';
+  const possible = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  for (let i = 0; i < 32; i++) {
+    text += possible.charAt(Math.floor(Math.random() * possible.length));
+  }
+  return text;
+}
+
 function deactivate() {}
 
 module.exports = {
@@ -761,4 +809,5 @@ module.exports = {
   generateSequenceDiagram, // Kept for potential other uses or direct full generation
   invokeClaudeLlmWithPrompt, // New function for direct LLM call with prompt
   generateSequenceDiagramPrompt,
+  getMermaidDisplayWebviewContent // Export new function
 };
