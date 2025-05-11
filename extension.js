@@ -28,6 +28,8 @@ function activate(context) {
       );                                                                   
 
       // Parse .git/config for remote.origin.url
+      // repoUrl and branch might be used elsewhere or for future features,
+      // so their calculation is kept, but they are not used by the simplified createFileLinksHtml.
       let repoUrl = '';
       try {
         const cfg = parseGitConfig();                                   
@@ -38,21 +40,13 @@ function activate(context) {
       } catch (err) {
         console.error('Git parse error:', err);
       }
+      const branch = 'main'; // adjust or derive dynamically if needed
 
       // Build HTML list of links
       let list = '<ul>';
-      const branch = 'main'; // adjust or derive dynamically if needed
 
       for (const uri of uris) {
-        const rel = vscode.workspace.asRelativePath(uri);               
-        const openCmd = `command:vscode.open?${encodeURIComponent(
-          JSON.stringify([uri])
-        )}`;
-
-        list += `<li>
-          <a href="${openCmd}">${rel}</a>
-          ${repoUrl ? ` — <a href="${repoUrl}/blob/${branch}/${rel}" target="_blank">GitHub</a>` : ''}
-        </li>`;
+        list += `<li>${createFileLinksHtml(uri, context)}</li>`; // Pass context
       }
 
       list += '</ul>';
@@ -130,7 +124,7 @@ function activate(context) {
                   return;
                 }
                 const diagramType = message.payload && message.payload.diagramType ? message.payload.diagramType : 'sequence'; // Default to sequence
-                const prompt = await generateSequenceDiagramPrompt([panel.webview.callHierarchyData], panel, diagramType);
+                const prompt = await generateSequenceDiagramPrompt([panel.webview.callHierarchyData], panel, diagramType, context); // Pass context
                 panel.webview.postMessage({ command: 'mermaidDiagramPromptData', payload: prompt });
               } catch (e) {
                 console.error('Error generating Mermaid diagram prompt:', e);
@@ -183,6 +177,16 @@ function activate(context) {
                 vscode.window.showErrorMessage('Error opening Mermaid display webview. Check console for details.');
               }
               return;
+            case 'openFileInEditor':
+              if (message.payload && message.payload.filePath && message.payload.startLine) {
+                await openFileAtLocation(
+                  context, // Pass context
+                  message.payload.filePath,
+                  message.payload.startLine,
+                  message.payload.endLine || message.payload.startLine
+                );
+              }
+              return;
           }
         },
         undefined,
@@ -192,6 +196,26 @@ function activate(context) {
   );
 
   context.subscriptions.push(showLinksDisposable, generateDiagramDisposable);
+}
+
+/**
+ * Creates HTML string for a link to open the file in VS Code.
+ * @param {vscode.Uri} uri The URI of the file.
+ * @param {vscode.ExtensionContext} context The extension context.
+ * @returns {string} HTML string for an anchor tag.
+ */
+function createFileLinksHtml(uri, context) {
+  const filename = path.basename(uri.fsPath);
+  let relativePath = uri.fsPath;
+
+  const workspaceFolders = vscode.workspace.workspaceFolders;
+  if (workspaceFolders && workspaceFolders.length > 0) {
+    const workspaceRoot = workspaceFolders[0].uri.fsPath;
+    relativePath = path.relative(workspaceRoot, uri.fsPath);
+  }
+
+  // Updated to the shorter link format
+  return `<a href="#" class="code-link" data-file="${relativePath}">${filename}</a>`;
 }
 
 /**
@@ -292,12 +316,10 @@ async function generateSequenceDiagram(editor, panel, existingHierarchyData) {
   }
 
   try {
-    const prompt = await generateSequenceDiagramPrompt([hierarchyDataToUse], panel);
+    const prompt = await generateSequenceDiagramPrompt([hierarchyDataToUse], panel, 'sequence', context); // Pass context
     // Call the separated LLM invocation function
     return await invokeClaudeLlmWithPrompt(prompt, panel);
   } catch (error) {
-    // This catch might be redundant if invokeClaudeLlmWithPrompt handles its errors well
-    // and generateSequenceDiagramPrompt also does.
     console.error('Error in generateSequenceDiagram (outer shell):', error);
     const errorMessage = error.message || 'An unknown error occurred during the full diagram generation process.';
     vscode.window.showErrorMessage(`Error in full diagram generation: ${errorMessage}`);
@@ -419,6 +441,7 @@ async function buildHierarchyRecursively(item, workspacePaths, processedItems, p
         endLine: item.range.end.line + 1,
         file: item.uri.fsPath
       },
+      link: createFileLinksHtml(item.uri, context), // Pass context
       source: '',
       classAnnotations: '',
       reference: "Already processed - cycle detected"
@@ -459,6 +482,7 @@ async function buildHierarchyRecursively(item, workspacePaths, processedItems, p
       endLine: item.range.end.line + 1,
       file: item.uri.fsPath
     },
+    link: createFileLinksHtml(item.uri, context), // Pass context
     source,
     classAnnotations,
     outgoingCalls: []
@@ -503,6 +527,7 @@ async function buildHierarchyRecursively(item, workspacePaths, processedItems, p
         endLine: call.to.range.end.line + 1,
         file: call.to.uri.fsPath
       },
+      link: createFileLinksHtml(call.to.uri, context), // Pass context
       source: callSource,
       classAnnotations: callClassAnnotations,
       callSites: call.fromRanges.map(range => ({
@@ -610,9 +635,10 @@ function collectSources(data, sources) {
  * @param {object[]} hierarchyData The call hierarchy data
  * @param {vscode.WebviewPanel | null} panel The webview panel to send progress updates to. Can be null if no progress updates are needed.
  * @param {string} diagramType The type of diagram to generate ('sequence' or 'flowchart').
+ * @param {vscode.ExtensionContext} context The extension context.
  * @returns {Promise<string>} The generated prompt
  */
-async function generateSequenceDiagramPrompt(hierarchyData, panel, diagramType = 'sequence') {
+async function generateSequenceDiagramPrompt(hierarchyData, panel, diagramType = 'sequence', context) { // Add context
   if (panel && panel.webview) {
     panel.webview.postMessage({ command: 'updateProgressStatus', payload: `Generating ${diagramType} diagram prompt...` });
   }
@@ -666,7 +692,9 @@ async function generateSequenceDiagramPrompt(hierarchyData, panel, diagramType =
       .join('\n');
 
     prompt.push('################################');
-    prompt.push(`File: ${filename}`);
+    //prompt.push(`File: ${filename}`);
+		const link = createFileLinksHtml(vscode.Uri.file(filename), context); // Pass context
+		prompt.push(`Link: ${link}`);
     prompt.push(`Class: ${className}`);
     if (classAnnotations) {
       prompt.push('Class Annotations:');
@@ -811,6 +839,45 @@ function getNonce() {
   return text;
 }
 
+/**
+ * Opens a file in the editor at a specific location.
+ * @param {vscode.ExtensionContext} context The extension context.
+ * @param {string} relativeFilePath Relative path to the file from the workspace root.
+ * @param {number} startLine One-based line number for the start of the selection.
+ * @param {number} endLine One-based line number for the end of the selection.
+ */
+async function openFileAtLocation(context, relativeFilePath, startLine, endLine) {
+  try {
+    const workspaceFolders = vscode.workspace.workspaceFolders;
+    if (!workspaceFolders || workspaceFolders.length === 0) {
+      vscode.window.showErrorMessage('Cannot open file: No workspace folder found.');
+      return;
+    }
+    const workspaceRoot = workspaceFolders[0].uri.fsPath;
+    const absoluteFilePath = path.resolve(workspaceRoot, relativeFilePath);
+
+    const uri = vscode.Uri.file(absoluteFilePath);
+    const document = await vscode.workspace.openTextDocument(uri);
+    const editor = await vscode.window.showTextDocument(document);
+
+    // Convert to zero-based line numbers for VS Code API
+    const startPos = Math.max(0, startLine - 1);
+    const endPos = endLine ? Math.max(startPos, endLine - 1) : startPos;
+    
+    const lineText = editor.document.lineAt(endPos).text;
+    const range = new vscode.Range(
+      new vscode.Position(startPos, 0), // Start of the line
+      new vscode.Position(endPos, lineText.length) // End of the line
+    );
+    
+    editor.selection = new vscode.Selection(range.start, range.end);
+    editor.revealRange(range, vscode.TextEditorRevealType.InCenterIfOutsideViewport);
+  } catch (error) {
+    console.error(`Error opening file ${relativeFilePath}:`, error);
+    vscode.window.showErrorMessage(`Could not open file: ${relativeFilePath}. ${error.message || String(error)}`);
+  }
+}
+
 function deactivate() {}
 
 module.exports = {
@@ -821,5 +888,6 @@ module.exports = {
   generateSequenceDiagram, // Kept for potential other uses or direct full generation
   invokeClaudeLlmWithPrompt, // New function for direct LLM call with prompt
   generateSequenceDiagramPrompt,
-  getMermaidDisplayWebviewContent // Export new function
+  getMermaidDisplayWebviewContent, // Export new function
+  openFileAtLocation // Exported for external use
 };

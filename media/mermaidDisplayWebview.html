@@ -376,7 +376,8 @@
 						if (modalSourceContent) modalSourceContent.textContent = message.code;
 						
 						if (modalPromptContent) {
-							modalPromptContent.textContent = message.prompt || 'Prompt not available.';
+							// Use innerHTML to render HTML links in the prompt
+							modalPromptContent.innerHTML = message.prompt || 'Prompt not available.';
 						}
 						renderMermaid();
 						break;
@@ -430,7 +431,32 @@
 				const modalSourceContent = document.getElementById('modal-source-content');
 				const modalPromptContent = document.getElementById('modal-prompt-content');
 				if (modalSourceContent) modalSourceContent.textContent = initialMermaidCode;
-				if (modalPromptContent) modalPromptContent.textContent = initialPromptData;
+				if (modalPromptContent) {
+					// Use innerHTML for initial load as well
+					modalPromptContent.innerHTML = initialPromptData;
+				}
+
+				// Add event listener for dynamically created links in the modal
+				document.body.addEventListener('click', function(event) {
+					const target = event.target.closest('a.code-link'); 
+					if (target) { // Check if the clicked element is an anchor with class 'code-link'
+						event.preventDefault(); // Prevent default anchor behavior
+						const filePath = target.dataset.file;
+						const startLine = 1; // Default to line 1 as it's no longer in data attributes
+						const endLine = 1;   // Default to line 1
+
+						if (filePath) { // Ensure filePath is present
+							vscode.postMessage({
+								command: 'openFileInEditor', // Command is now implicit
+								payload: {
+									filePath: filePath,
+									startLine: startLine,
+									endLine: endLine
+								}
+							});
+						}
+					}
+				});
 
 				renderMermaid();
 			});
