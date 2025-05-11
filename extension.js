@@ -138,16 +138,48 @@ function getWebviewContentForDiagram() {
     <meta charset="UTF-8">
     <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src vscode-resource: 'unsafe-inline' 'self'; style-src vscode-resource: 'unsafe-inline'; img-src vscode-resource: data:;">
     <title>Generate Mermaid Diagram</title>
+    <style>
+      .spinner {
+        display: inline-block;
+        border: 3px solid #f3f3f3; /* Light grey */
+        border-top: 3px solid #3498db; /* Blue */
+        border-radius: 50%;
+        width: 16px;
+        height: 16px;
+        animation: spin 1s linear infinite;
+        margin-left: 10px;
+        vertical-align: middle;
+      }
+      @keyframes spin {
+        0% { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
+      }
+    </style>
     <script>
       const vscodeApi = acquireVsCodeApi();
 
       function showCallHierarchyItems() {
+        const spinner = document.getElementById('loadingSpinner');
+        spinner.style.display = 'inline-block'; // Show spinner
         vscodeApi.postMessage({ command: 'getCallHierarchyItems' });
+      }
+
+      function showRecursiveOutgoingCalls() {
+        const spinnerRecursive = document.getElementById('loadingSpinnerRecursive');
+        spinnerRecursive.style.display = 'inline-block'; // Show spinner
+        // vscodeApi.postMessage({ command: 'getRecursiveOutgoingCalls' }); // Logic to be added later
       }
 
       window.addEventListener('message', event => {
         const message = event.data; // The json data that the extension sent
         const textArea = document.getElementById('callHierarchyItems');
+        const spinner = document.getElementById('loadingSpinner');
+        const textAreaRecursive = document.getElementById('recursiveOutgoingCalls');
+        const spinnerRecursive = document.getElementById('loadingSpinnerRecursive');
+        
+        if (spinner) spinner.style.display = 'none'; // Hide spinner
+        if (spinnerRecursive) spinnerRecursive.style.display = 'none'; // Hide spinner for recursive calls
+
         switch (message.command) {
           case 'callHierarchyItemsData':
             textArea.value = JSON.stringify(message.payload, null, 2);
@@ -155,6 +187,7 @@ function getWebviewContentForDiagram() {
           case 'callHierarchyItemsError':
             textArea.value = message.payload;
             break;
+          // Cases for recursive outgoing calls to be added later
         }
       });
     </script>
@@ -162,8 +195,14 @@ function getWebviewContentForDiagram() {
 <body>
     <h1>Generate Mermaid Diagram</h1>
     <button onclick="showCallHierarchyItems()">Show Call Hierarchy Items</button>
+    <div id="loadingSpinner" class="spinner" style="display:none;"></div>
     <br>
     <textarea id="callHierarchyItems" style="width:100%; height:200px;" readonly></textarea>
+    <br><br>
+    <button onclick="showRecursiveOutgoingCalls()">Show Recursive Outgoing Calls</button>
+    <div id="loadingSpinnerRecursive" class="spinner" style="display:none;"></div>
+    <br>
+    <textarea id="recursiveOutgoingCalls" style="width:100%; height:200px;" readonly></textarea>
 </body>
 </html>`;
 }

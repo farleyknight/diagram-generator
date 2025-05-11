@@ -12,6 +12,18 @@ For example if there is an image subfolder under your extension project workspac
 
 > Tip: Many popular extensions utilize animations. This is an excellent way to show off your extension! We recommend short, focused animations that are easy to follow.
 
+### Generate Mermaid Diagram (`diagram-generator.generateDiagram`)
+
+This command opens a webview panel titled "Generate Mermaid Diagram". This panel is designed to help visualize call hierarchies within your Java code.
+
+The webview page features:
+*   A button labeled "Show Call Hierarchy Items".
+*   Clicking this button triggers a request to the extension to fetch the call hierarchy for the currently active position in your Java editor.
+*   A loading spinner is displayed while the data is being fetched.
+*   The fetched call hierarchy data (or an error message if the process fails) is then displayed in a read-only textarea.
+
+This feature is accessible when a Java file is open and active in the editor. If no editor is active or the active file is not a Java file, an error message will be displayed.
+
 ## Requirements
 
 If you have any requirements or dependencies, add a section describing those and how to install and configure them.
