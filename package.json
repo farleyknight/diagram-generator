@@ -12,8 +12,21 @@
       {
         "command": "diagram-generator.showLinks",
         "title": "Diagram Generator: Show Java File Links"
+      },
+      {
+        "command": "diagram-generator.generateDiagram",
+        "title": "Diagram Generator: Generate Mermaid Diagram"
       }
-    ]
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "when": "resourceLangId == java",
+          "command": "diagram-generator.generateDiagram",
+          "group": "navigation"
+        }
+      ]
+    }
   },
   "dependencies": {
     "parse-git-config": "^3.0.0"

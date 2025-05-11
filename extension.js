@@ -6,7 +6,7 @@ const parseGitConfig = require('parse-git-config').sync;
  * @param {vscode.ExtensionContext} context
  */
 function activate(context) {
-  const disposable = vscode.commands.registerCommand(
+  const showLinksDisposable = vscode.commands.registerCommand(
     'diagram-generator.showLinks',
     async () => {
       // Create and show a webview panel
@@ -55,21 +55,42 @@ function activate(context) {
       }
 
       list += '</ul>';
-      panel.webview.html = getHtml(list);
+      panel.webview.html = getWebviewContent(list);
     }
   );
 
-  context.subscriptions.push(disposable);
+  const generateDiagramDisposable = vscode.commands.registerCommand(
+    'diagram-generator.generateDiagram',
+    async () => {
+      // Create and show a webview panel
+      const panel = vscode.window.createWebviewPanel(
+        'generateDiagram', // Identifies the type of the webview. Used internally
+        'Generate Mermaid Diagram', // Title of the panel displayed to the user
+        vscode.ViewColumn.One, // Editor column to show the new webview panel in.
+        {
+          // Enable scripts in the webview
+          enableScripts: true,
+          localResourceRoots: [vscode.Uri.file(path.join(context.extensionPath, 'media'))]
+        }
+      );
+
+      // Set the HTML content
+      panel.webview.html = getWebviewContent("<h1>Generate Mermaid Diagram</h1>");
+    }
+  );
+
+  context.subscriptions.push(showLinksDisposable, generateDiagramDisposable);
 }
 exports.activate = activate;
 
-function getHtml(body) {
+// Renamed getHtml to getWebviewContent to avoid confusion and for clarity
+function getWebviewContent(body) {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src vscode-resource: 'unsafe-inline'; style-src vscode-resource: 'unsafe-inline'; img-src vscode-resource: data:;">
-    <title>Java Source Links</title>
+    <title>Generate Mermaid Diagram</title>
 </head>
 <body>${body}</body>
 </html>`;
@@ -90,4 +111,4 @@ function toHTTPS(url) {
 
 function deactivate() {}
 
-module.exports = { activate, deactivate };
+module.exports = { activate, deactivate, getWebviewContent };
