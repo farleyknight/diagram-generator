@@ -1,0 +1,21 @@
+{
+  "name": "diagram-generator",
+  "displayName": "Diagram Generator",
+  "description": "Scan Java files and show links in a Webview",
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "1.99.3"
+  },
+  "main": "extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "diagram-generator.showLinks",
+        "title": "Diagram Generator: Show Java File Links"
+      }
+    ]
+  },
+  "dependencies": {
+    "parse-git-config": "^3.0.0"
+  }
+}

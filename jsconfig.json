@@ -1,0 +1,26 @@
+{
+  "name": "diagram-generator",
+  "displayName": "Diagram Generator",
+  "description": "Scans Java files and creates links to source and GitHub",
+  "compilerOptions": {},
+  "version": "0.0.1",
+  "publisher": "your-publisher-name",
+  "engines": {
+    "vscode": "^1.60.0"
+  },
+  "activationEvents": [
+    "onLanguage:java"
+  ],
+  "main": "extension.js",
+  "dependencies": {
+    "parse-git-config": "^3.0.0"
+  },
+  "contributes": {
+    "commands": [
+      {
+        "command": "diagram-generator.showLinks",
+        "title": "Diagram Generator: Show Links"
+      }
+    ]
+  }
+}
