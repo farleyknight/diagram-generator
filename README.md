@@ -17,10 +17,19 @@ For example if there is an image subfolder under your extension project workspac
 This command opens a webview panel titled "Generate Mermaid Diagram". This panel is designed to help visualize call hierarchies within your Java code.
 
 The webview page features:
-*   A button labeled "Show Call Hierarchy Items".
-*   Clicking this button triggers a request to the extension to fetch the call hierarchy for the currently active position in your Java editor.
-*   A loading spinner is displayed while the data is being fetched.
-*   The fetched call hierarchy data (or an error message if the process fails) is then displayed in a read-only textarea.
+
+*   A button labeled "Show Call Hierarchy Items":
+    *   Clicking this button triggers a request to the extension to fetch the call hierarchy for the currently active position in your Java editor.
+    *   A loading spinner is displayed while the data is being fetched.
+    *   The fetched call hierarchy data (or an error message if the process fails) is then displayed in a read-only textarea.
+*   A button labeled "Show Recursive Outgoing Calls":
+    *   Clicking this button triggers a request to the extension to fetch and build a recursive call hierarchy starting from the item at the currently active position in your Java editor. This focuses on calls within the local project.
+    *   A loading spinner is displayed while the data is being fetched and processed.
+    *   The fetched recursive call hierarchy data (or an error message if the process fails) is then displayed in a separate read-only textarea.
+*   A button labeled "Generate Mermaid Diagram Prompt":
+    *   Clicking this button triggers a request to the extension to generate a text prompt suitable for creating a Mermaid sequence diagram. This prompt is based on the previously fetched recursive call hierarchy data.
+    *   A loading spinner is displayed while the prompt is being generated.
+    *   The generated prompt (or an error message if the process fails, for example, if the recursive call hierarchy hasn't been generated yet) is then displayed in a third read-only textarea.
 
 This feature is accessible when a Java file is open and active in the editor. If no editor is active or the active file is not a Java file, an error message will be displayed.
 
