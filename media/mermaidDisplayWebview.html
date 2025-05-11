@@ -167,6 +167,8 @@
 			const vscode = acquireVsCodeApi();
 			const state = vscode.getState() || { rendered: false };
 
+			// let isDragAndPanEnabled = true; // Flag to control drag and pana
+      let isDragAndPanEnabled = true; // Flag to control drag and pan
 			let currentScale = 1.0;
 			let panX = 0;
 			let panY = 0;
@@ -175,6 +177,26 @@
 			let panStartY = 0;
 			let initialPanXForDrag = 0;
 			let initialPanYForDrag = 0;
+
+			// Renamed from openNewVSCodeWindow and updated to use the nodeId map
+			window.handleMermaidNodeClick = function(nodeId) {
+				console.log('handleMermaidNodeClick called with nodeId:', nodeId); // Log the received nodeId
+				const filePath = window.mermaidNodeIdMap ? window.mermaidNodeIdMap[nodeId] : undefined;
+				console.log('Looked up filePath:', filePath); // Log the looked-up filePath
+
+				if (filePath) {
+					vscode.postMessage({
+						command: 'openFileInEditor',
+						payload: {
+							filePath: filePath,
+							startLine: 1, // Default to line 1
+							endLine: 1   // Default to line 1
+						}
+					});
+				} else {
+					console.warn('handleMermaidNodeClick: filePath not found for nodeId:', nodeId, 'Map:', window.mermaidNodeIdMap);
+				}
+			};
 
 			function getMermaidSvgElement() {
 				const container = document.getElementById('mermaid-container');
@@ -238,6 +260,26 @@
 				if (!isPanning) return;
 				isPanning = false;
 				document.getElementById('diagram-container').classList.remove('grabbing');
+			}
+
+			function setDragAndPan(enabled) {
+				const diagramContainer = document.getElementById('diagram-container');
+				if (enabled) {
+					diagramContainer.addEventListener('mousedown', startPan);
+					document.addEventListener('mousemove', doPan);
+					document.addEventListener('mouseup', endPan);
+					document.addEventListener('mouseleave', (event) => {
+						if (event.buttons === 0 && isPanning) endPan();
+					});
+				} else {
+					diagramContainer.removeEventListener('mousedown', startPan);
+					document.removeEventListener('mousemove', doPan);
+					document.removeEventListener('mouseup', endPan);
+					document.removeEventListener('mouseleave', (event) => {
+						if (event.buttons === 0 && isPanning) endPan();
+					});
+				}
+				isDragAndPanEnabled = enabled;
 			}
 
 			function openModal(modalId) {
@@ -418,12 +460,7 @@
 				document.getElementById('reset-view-btn').addEventListener('click', resetView);
 
 				const diagramContainer = document.getElementById('diagram-container');
-				diagramContainer.addEventListener('mousedown', startPan);
-				document.addEventListener('mousemove', doPan);
-				document.addEventListener('mouseup', endPan);
-				document.addEventListener('mouseleave', (event) => {
-					if (event.buttons === 0 && isPanning) endPan();
-				});
+				setDragAndPan(isDragAndPanEnabled); // Initialize drag and pan based on the flag
 				
 				const initialMermaidCode = document.querySelector('pre.mermaid')?.textContent || '';
 				const initialPromptData = document.getElementById('initial-prompt-data')?.textContent || 'Prompt not available.';

@@ -218,6 +218,7 @@
     <select id="diagramTypeSelector" style="margin-left: 10px;">
         <option value="sequence">Sequence Diagram</option>
         <option value="flowchart">Flowchart Diagram</option>
+        <option value="flowchart-links">Flowchart with Links</option>
     </select>
     <div id="loadingSpinnerMermaid" class="spinner" style="display:none;"></div>
     <br>
@@ -227,7 +228,7 @@
     <button onclick="generateClaudeAIDiagramInWebview()">Generate Claude AI Diagram (uses edited prompt from above)</button>
     <div id="loadingSpinnerClaude" class="spinner" style="display:none;"></div>
     <br>
-    <textarea id="claudeDiagramTextarea" style="height:300px;" readonly placeholder="Claude AI generated Mermaid diagram (from the prompt above) will appear here."></textarea>
+    <textarea id="claudeDiagramTextarea" style="height:300px;" placeholder="Claude AI generated Mermaid diagram (from the prompt above) will appear here."></textarea>
     <br><br>
 
     <button onclick="openMermaidDisplayWebview()">View Mermaid Diagram in New Webview</button>

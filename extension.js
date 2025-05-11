@@ -105,7 +105,7 @@ function activate(context) {
               return;
             case 'getRecursiveOutgoingCalls':
               try {
-                const hierarchyData = await getCallHierarchyData(uri, position, panel);
+                const hierarchyData = await getCallHierarchyData(uri, position, panel, context);
                 if (hierarchyData) {
                   panel.webview.postMessage({ command: 'recursiveOutgoingCallsData', payload: hierarchyData });
                 } else {
@@ -223,9 +223,10 @@ function createFileLinksHtml(uri, context) {
  * @param {vscode.Uri} uri Document URI
  * @param {vscode.Position} position Position in the document
  * @param {vscode.WebviewPanel} panel The webview panel
+ * @param {vscode.ExtensionContext} context The extension context
  * @returns {Promise<object|null>} The hierarchy data or null on failure
  */
-async function getCallHierarchyData(uri, position, panel) {
+async function getCallHierarchyData(uri, position, panel, context) {
   if (panel && panel.webview && panel.webview.callHierarchyData) {
     if (panel.webview) {
       panel.webview.postMessage({ command: 'updateProgressStatus', payload: 'Reusing existing call hierarchy data.' });
@@ -250,7 +251,7 @@ async function getCallHierarchyData(uri, position, panel) {
     }
     const workspacePaths = new Set(workspaceFolders.map(folder => folder.uri.fsPath));
     const processedItems = new Set();
-    const callHierarchyData = await buildHierarchyRecursively(rootItem, workspacePaths, processedItems, panel);
+    const callHierarchyData = await buildHierarchyRecursively(rootItem, workspacePaths, processedItems, panel, context);
     if (panel && panel.webview) {
       panel.webview.callHierarchyData = callHierarchyData; // Cache it
       panel.webview.postMessage({ command: 'updateProgressStatus', payload: 'Call hierarchy data fetched.' });
@@ -270,9 +271,10 @@ async function getCallHierarchyData(uri, position, panel) {
  * @param {vscode.TextEditor} editor The active text editor
  * @param {vscode.WebviewPanel} panel The webview panel to send progress updates to
  * @param {object} [existingHierarchyData] Optional pre-fetched hierarchy data
+ * @param {vscode.ExtensionContext} context The extension context
  * @returns {Promise<string|null>} The generated Mermaid sequence diagram text or null on failure
  */
-async function generateSequenceDiagram(editor, panel, existingHierarchyData) {
+async function generateSequenceDiagram(editor, panel, existingHierarchyData, context) {
   if (!editor) {
     vscode.window.showInformationMessage('No active editor');
     if (panel && panel.webview) {
@@ -293,7 +295,7 @@ async function generateSequenceDiagram(editor, panel, existingHierarchyData) {
       panel.webview.postMessage({ command: 'updateProgressStatus', payload: 'Fetching call hierarchy data for full diagram generation...' });
     }
     try {
-      hierarchyDataToUse = await getCallHierarchyData(editor.document.uri, editor.selection.active, panel);
+      hierarchyDataToUse = await getCallHierarchyData(editor.document.uri, editor.selection.active, panel, context);
     } catch (e) {
       const errorMsg = `Failed to get call hierarchy data for full generation: ${e.message}`;
       vscode.window.showErrorMessage(errorMsg);
@@ -427,9 +429,10 @@ async function invokeClaudeLlmWithPrompt(promptText, panel) {
  * @param {Set<string>} workspacePaths Set of workspace folder paths
  * @param {Set<string>} processedItems Set of already processed items to avoid cycles
  * @param {vscode.WebviewPanel | null} panel The webview panel to send progress updates to (can be null)
+ * @param {vscode.ExtensionContext} context The extension context
  * @returns {Promise<object>} The hierarchy data for this item
  */
-async function buildHierarchyRecursively(item, workspacePaths, processedItems, panel) {
+async function buildHierarchyRecursively(item, workspacePaths, processedItems, panel, context) {
   const itemId = `${item.uri.fsPath}:${item.range.start.line}:${item.range.start.character}`;
 
   if (processedItems.has(itemId)) {
@@ -541,7 +544,7 @@ async function buildHierarchyRecursively(item, workspacePaths, processedItems, p
     }
 
     if (!isCallExternal) {
-      const nestedCalls = await buildHierarchyRecursively(call.to, workspacePaths, processedItems, panel);
+      const nestedCalls = await buildHierarchyRecursively(call.to, workspacePaths, processedItems, panel, context);
       if (nestedCalls.outgoingCalls) {
         callData.outgoingCalls = nestedCalls.outgoingCalls;
       }
@@ -634,7 +637,7 @@ function collectSources(data, sources) {
  * Generates a prompt for sequence diagram generation based on call hierarchy data
  * @param {object[]} hierarchyData The call hierarchy data
  * @param {vscode.WebviewPanel | null} panel The webview panel to send progress updates to. Can be null if no progress updates are needed.
- * @param {string} diagramType The type of diagram to generate ('sequence' or 'flowchart').
+ * @param {string} diagramType The type of diagram to generate ('sequence', 'flowchart', or 'flowchart-links').
  * @param {vscode.ExtensionContext} context The extension context.
  * @returns {Promise<string>} The generated prompt
  */
@@ -643,7 +646,6 @@ async function generateSequenceDiagramPrompt(hierarchyData, panel, diagramType =
     panel.webview.postMessage({ command: 'updateProgressStatus', payload: `Generating ${diagramType} diagram prompt...` });
   }
 
-  // Collect all non-empty sources with their filenames, class names and annotations
   const sources = [];
   for (const data of hierarchyData) {
     collectSources(data, sources);
@@ -656,46 +658,73 @@ async function generateSequenceDiagramPrompt(hierarchyData, panel, diagramType =
     throw new Error('No source code found to generate diagram');
   }
 
-  // Create the prompt
   let promptHeader = '';
+  // Determine if link instructions should be provided to the LLM
+  const provideLinkInstructions = diagramType === 'flowchart-links' || diagramType === 'sequence';
+
   if (diagramType === 'flowchart') {
     promptHeader =
     'Please create a Mermaid Flowchart using these Java classes. ' +
     'Use flowchart LR (left to right) direction. ' +
-    'Group related methods by class using subgraphs. ' +
-    'Show the control flow between methods. ' +
+    'For each class provided, use its name (e.g., ProductController.java) as the node ID and the displayed text in the diagram. ' +
+    'Group related methods by class using subgraphs if it makes sense. ' +
+    'Show the control flow between methods/classes. ' +
     'Style external calls differently using dashed lines. ' +
     'Show URLs and REST API calls. Show SQL queries. ' +
     'Use the [(Database)] syntax. ' +
     'Include control flow (if/else, for/while) and add notes for important logic.\n';
-  } else { // Default to sequence diagram
+  } else if (diagramType === 'flowchart-links') {
+    promptHeader =
+    'Please create a Mermaid Flowchart using these Java classes. ' +
+    'Use flowchart LR (left to right) direction. ' +
+    'For each class provided below: ' +
+    '  - Use its name (e.g., ProductController.java) as the node ID in the diagram. ' +
+    '  - The text displayed for the node should also be the class name. ' +
+    '  - IMPORTANT: Create a click interaction for each class node using the "Link:" information provided for it. ' +
+    '    The format MUST be: click ClassName.java href "vscode://file//ABSOLUTE/PATH/TO/ClassName.java" "Open ClassName.java". ' +
+    '    Example: For a class ProductController.java with link information ' +
+    '    Link: click ProductController.java href "vscode://file//path/to/ProductController.java" "Open ProductController.java", ' +
+    '    the diagram code must include the line: click ProductController.java href "vscode://file//path/to/ProductController.java" "Open ProductController.java".\n' +
+    'Show the control flow between methods/classes. ' +
+    'Style external calls differently using dashed lines.\n';
+  } else if (diagramType === 'sequence') { // Default to sequence diagram with links
     promptHeader =
     'Please create a Mermaid Sequence Diagram using these Java classes. ' +
-		'The first entry begins the diagram. ' +
-		'Feel free to add multiple levels (6 or more) if it makes sense. ' +
-		'Please include each method call in your diagram. ' +
-		'Include "Note over" in several places to call out what functionality is doing. ' +
-		'Include if/else conditions, and include details about SQL queries. \n';
+    'The first entry begins the diagram. ' +
+    'For each class provided, use its name (e.g., ProductController.java) as the participant alias and description in the diagram. ' +
+    'Feel free to add multiple levels (6 or more) if it makes sense. ' +
+    'Please include each method call in your diagram. ' +
+    'Include "Note over" in several places to call out what functionality is doing. ' +
+    'Include if/else conditions, and include details about SQL queries. \n' +
+    'IMPORTANT: For each participant representing a class, create a click interaction using the "Link:" information provided for it. ' +
+    'The format MUST be: click ClassName.java href "vscode://file//ABSOLUTE/PATH/TO/ClassName.java" "Open ClassName.java". ' +
+    'Example: For a class ProductController.java with link information ' +
+    'Link: click ProductController.java href "vscode://file//path/to/ProductController.java" "Open ProductController.java", ' +
+    'the diagram code must include the line: click ProductController.java href "vscode://file//path/to/ProductController.java" "Open ProductController.java".\n';
   }
 
   const prompt = [promptHeader];
 
   sources.forEach(({source, filename, className, classAnnotations}) => {
-    // Extract method annotations from the source
     const methodAnnotations = source.split('\n')
       .filter(line => line.trim().startsWith('@'))
       .join('\n');
-
-    // Get the actual method code (everything after the annotations)
     const methodCode = source.split('\n')
       .filter(line => !line.trim().startsWith('@'))
       .join('\n');
 
     prompt.push('################################');
-    //prompt.push(`File: ${filename}`);
-		const link = createFileLinksHtml(vscode.Uri.file(filename), context); // Pass context
-		prompt.push(`Link: ${link}`);
-    prompt.push(`Class: ${className}`);
+    const baseFilename = path.basename(filename); // e.g., ProductController.java
+    const absoluteFilePath = path.resolve(filename); // Ensures it's absolute
+
+    // Provide link information only for diagram types that should have links
+    if (provideLinkInstructions) {
+      // Instruct LLM to use baseFilename (e.g., ProductController.java) as the ID in the click directive.
+      const clickLink = `click ${baseFilename} href "vscode://file/${absoluteFilePath}" "Open ${baseFilename}"`;
+      prompt.push(`Link: ${clickLink}`);
+    }
+    prompt.push(`Class: ${className}`); // Actual class name from source
+    prompt.push(`Filename: ${baseFilename}`); // Base filename for LLM to use as node ID/text
     if (classAnnotations) {
       prompt.push('Class Annotations:');
       prompt.push(classAnnotations);
@@ -709,7 +738,7 @@ async function generateSequenceDiagramPrompt(hierarchyData, panel, diagramType =
   prompt.push('################################');
 
   if (panel && panel.webview) {
-    panel.webview.postMessage({ command: 'updateProgressStatus', payload: 'Sequence diagram prompt generated.' });
+    panel.webview.postMessage({ command: 'updateProgressStatus', payload: `${diagramType} diagram prompt generated.` });
   }
   return prompt.join('\n');
 }
