@@ -62,6 +62,19 @@ function activate(context) {
   const generateDiagramDisposable = vscode.commands.registerCommand(
     'diagram-generator.generateDiagram',
     async () => {
+      const editor = vscode.window.activeTextEditor;
+      if (!editor) {
+        vscode.window.showErrorMessage('No active editor found. Please open a Java file.');
+        return;
+      }
+      if (editor.document.languageId !== 'java') {
+        vscode.window.showErrorMessage('This command can only be run on Java files.');
+        return;
+      }
+
+      const uri = editor.document.uri;
+      const position = editor.selection.active;
+
       // Create and show a webview panel
       const panel = vscode.window.createWebviewPanel(
         'generateDiagram', // Identifies the type of the webview. Used internally
@@ -75,7 +88,29 @@ function activate(context) {
       );
 
       // Set the HTML content
-      panel.webview.html = getWebviewContent("<h1>Generate Mermaid Diagram</h1>");
+      panel.webview.html = getWebviewContentForDiagram();
+
+      // Handle messages from the webview
+      panel.webview.onDidReceiveMessage(
+        async message => {
+          switch (message.command) {
+            case 'getCallHierarchyItems':
+              try {
+                const items = /** @type {vscode.CallHierarchyItem[]} */ (
+                  await vscode.commands.executeCommand('vscode.prepareCallHierarchy', uri, position)
+                );
+                panel.webview.postMessage({ command: 'callHierarchyItemsData', payload: items });
+              } catch (e) {
+                console.error('Error preparing call hierarchy:', e);
+                vscode.window.showErrorMessage('Error fetching call hierarchy items.');
+                panel.webview.postMessage({ command: 'callHierarchyItemsError', payload: 'Error fetching call hierarchy items. Check the console for details.' });
+              }
+              return;
+          }
+        },
+        undefined,
+        context.subscriptions
+      );
     }
   );
 
@@ -93,6 +128,43 @@ function getWebviewContent(body) {
     <title>Generate Mermaid Diagram</title>
 </head>
 <body>${body}</body>
+</html>`;
+}
+
+function getWebviewContentForDiagram() {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src vscode-resource: 'unsafe-inline' 'self'; style-src vscode-resource: 'unsafe-inline'; img-src vscode-resource: data:;">
+    <title>Generate Mermaid Diagram</title>
+    <script>
+      const vscodeApi = acquireVsCodeApi();
+
+      function showCallHierarchyItems() {
+        vscodeApi.postMessage({ command: 'getCallHierarchyItems' });
+      }
+
+      window.addEventListener('message', event => {
+        const message = event.data; // The json data that the extension sent
+        const textArea = document.getElementById('callHierarchyItems');
+        switch (message.command) {
+          case 'callHierarchyItemsData':
+            textArea.value = JSON.stringify(message.payload, null, 2);
+            break;
+          case 'callHierarchyItemsError':
+            textArea.value = message.payload;
+            break;
+        }
+      });
+    </script>
+</head>
+<body>
+    <h1>Generate Mermaid Diagram</h1>
+    <button onclick="showCallHierarchyItems()">Show Call Hierarchy Items</button>
+    <br>
+    <textarea id="callHierarchyItems" style="width:100%; height:200px;" readonly></textarea>
+</body>
 </html>`;
 }
 
