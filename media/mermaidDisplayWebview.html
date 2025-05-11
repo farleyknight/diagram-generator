@@ -14,20 +14,22 @@
 				border: 1px solid red;
 				display: none;
 			}
-			.source-code {
-				font-family: monospace;
-				white-space: pre-wrap;
-				margin: 10px;
-				padding: 10px;
-				border: 1px solid #ccc;
-				background-color: #f5f5f5;
-			}
 			.diagram-container {
 				margin: 10px;
 				padding: 10px;
 				border: 1px solid #ccc;
 				position: relative;
 				min-height: 200px;
+				overflow: hidden;
+				cursor: grab;
+			}
+			#mermaid-container {
+				width: 100%;
+				height: 100%;
+				transform-origin: top left;
+			}
+			.diagram-container.grabbing, .diagram-container.grabbing #mermaid-container svg {
+				cursor: grabbing;
 			}
 			.loading-spinner {
 				display: flex;
@@ -40,6 +42,7 @@
 				right: 0;
 				bottom: 0;
 				background: rgba(255, 255, 255, 0.9);
+				z-index: 10;
 			}
 			.spinner {
 				width: 50px;
@@ -57,7 +60,7 @@
 			@keyframes spin {
 				0% { transform: rotate(0deg); }
 				100% { transform: rotate(360deg); }
-				}
+			}
 			.regenerate-button {
 				background-color: #007bff;
 				color: white;
@@ -70,10 +73,91 @@
 			}
 			.regenerate-button:hover {
 				background-color: #0056b3;
+				}
+			.controls-bar {
+				display: flex;
+				gap: 8px;
+				padding: 10px;
+				background-color: #f0f0f0;
+				border-bottom: 1px solid #ccc;
+				align-items: center;
+				flex-wrap: wrap;
+			}
+			.controls-bar button {
+				padding: 6px 10px;
+				font-family: system-ui;
+				font-size: 13px;
+				border: 1px solid #ccc;
+				border-radius: 4px;
+				cursor: pointer;
+				background-color: #fff;
+			}
+			.controls-bar button:hover {
+				background-color: #e0e0e0;
+			}
+			.zoom-controls {
+				display: flex;
+				gap: 5px;
+				margin-left: auto;
+			}
+			.modal {
+				display: none;
+				position: fixed;
+				z-index: 1000;
+				left: 0;
+				top: 0;
+				width: 100%;
+				height: 100%;
+				overflow: auto;
+				background-color: rgba(0,0,0,0.5);
+			}
+			.modal-content {
+				background-color: #fefefe;
+				margin: 10% auto;
+				padding: 20px;
+				border: 1px solid #888;
+				width: 80%;
+				max-width: 700px;
+				border-radius: 8px;
+				position: relative;
+				box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+			}
+			.modal-content h2 {
+				margin-top: 0;
+				font-family: system-ui;
+				font-size: 18px;
+				color: #333;
+			}
+			.modal-content pre {
+				white-space: pre-wrap;
+				word-wrap: break-word;
+				background-color: #f8f8f8;
+				padding: 10px;
+				border: 1px solid #ddd;
+				border-radius: 4px;
+				max-height: 60vh;
+				overflow-y: auto;
+				font-family: monospace;
+				font-size: 13px;
+				color: #333;
+			}
+			.close-btn {
+				color: #aaa;
+				font-size: 28px;
+				font-weight: bold;
+				position: absolute;
+				top: 10px;
+				right: 15px;
+				line-height: 1;
+			}
+			.close-btn:hover,
+			.close-btn:focus {
+				color: black;
+				text-decoration: none;
+				cursor: pointer;
 			}
 		</style>
 		<script>
-			// Define mermaid configuration globally before rendering
 			mermaid.initialize({
 				startOnLoad: false,
 				theme: 'default',
@@ -81,75 +165,153 @@
 			});
 
 			const vscode = acquireVsCodeApi();
-			
-			// Get or initialize state
 			const state = vscode.getState() || { rendered: false };
 
+			let currentScale = 1.0;
+			let panX = 0;
+			let panY = 0;
+			let isPanning = false;
+			let panStartX = 0;
+			let panStartY = 0;
+			let initialPanXForDrag = 0;
+			let initialPanYForDrag = 0;
+
+			function getMermaidSvgElement() {
+				const container = document.getElementById('mermaid-container');
+				return container ? container.querySelector('svg') : null;
+			}
+
+			function applyTransform() {
+				const svgElement = getMermaidSvgElement();
+				const transformTarget = svgElement || document.getElementById('mermaid-container'); // Fallback to container if SVG not there
+				
+				if (transformTarget) {
+					// Changed from template literal to string concatenation to avoid potential parsing issues
+					transformTarget.style.transform = 'translate(' + panX + 'px, ' + panY + 'px) scale(' + currentScale + ')';
+				}
+			}
+			
+			function resetView() {
+				currentScale = 1.0;
+				panX = 0;
+				panY = 0;
+				applyTransform();
+			}
+
+			function zoomIn() {
+				currentScale *= 1.2;
+				applyTransform();
+			}
+
+			function zoomOut() {
+				currentScale /= 1.2;
+				currentScale = Math.max(0.1, currentScale);
+				applyTransform();
+			}
+
+			function startPan(event) {
+				const diagramContainer = document.getElementById('diagram-container');
+				if (event.target.closest('button') || event.target.closest('.modal')) return;
+				
+				const svgElement = getMermaidSvgElement();
+				if (event.target === diagramContainer || event.target === svgElement || (svgElement && svgElement.contains(event.target))) {
+					isPanning = true;
+					panStartX = event.clientX;
+					panStartY = event.clientY;
+					initialPanXForDrag = panX;
+					initialPanYForDrag = panY;
+					diagramContainer.classList.add('grabbing');
+					event.preventDefault();
+				}
+			}
+
+			function doPan(event) {
+				if (!isPanning) return;
+				const dx = event.clientX - panStartX;
+				const dy = event.clientY - panStartY;
+				panX = initialPanXForDrag + dx;
+				panY = initialPanYForDrag + dy;
+				applyTransform();
+			}
+
+			function endPan() {
+				if (!isPanning) return;
+				isPanning = false;
+				document.getElementById('diagram-container').classList.remove('grabbing');
+			}
+
+			function openModal(modalId) {
+				const modal = document.getElementById(modalId);
+				if (modal) modal.style.display = 'block';
+			}
+
+			function closeModal(modalId) {
+				const modal = document.getElementById(modalId);
+				if (modal) modal.style.display = 'none';
+			}
+
 			async function renderMermaid() {
-				// Remove any divs that Mermaid might have previously created and left in the body
 				document.querySelectorAll('div[id^="dmermaid-svg-"]').forEach(el => el.remove());
 
 				const errorDiv = document.getElementById('error-message');
 				const container = document.getElementById('mermaid-container');
 				const loadingSpinner = document.getElementById('loading-spinner');
 
-				// Ensure elements exist
 				if (!container) {
 					console.error("Mermaid container not found!");
 					return;
 				}
-				if (errorDiv) errorDiv.style.display = 'none'; // Hide previous custom errors
-
-				// Clear the main container's content early.
+				if (errorDiv) errorDiv.style.display = 'none';
+				
+				resetView();
 				container.innerHTML = '';
 
 				const preElement = document.querySelector('pre.mermaid');
 				console.log("Pre Element:", preElement);
 				if (!preElement || !preElement.textContent.trim()) {
 					console.log("No diagram code yet, waiting for data...");
-					container.innerHTML = '<p style="color:orange;">No diagram syntax found to render.</p>';
-					if (!state.rendered) { // Only show spinner if it's an initial load with no data
-						loadingSpinner.style.display = 'flex';
-					} else {
-						loadingSpinner.style.display = 'none';
-					}
+					container.innerHTML = '<p style="color:orange; padding: 10px;">No diagram syntax found to render.</p>';
+					loadingSpinner.style.display = state.rendered ? 'none' : 'flex';
 					return;
 				}
 				
-				// Show spinner before trying to render if we have syntax
 				loadingSpinner.style.display = 'flex';
 
 				const rawMermaidSyntaxWithFence = preElement.textContent.trim();
-				// Remove potential markdown code fence
 				let rawMermaidSyntax = rawMermaidSyntaxWithFence;
-				if (rawMermaidSyntax.startsWith('```mermaid')) {
-					rawMermaidSyntax = rawMermaidSyntax.substring('```mermaid'.length).trimStart();
+
+				// Define fence strings as constants to potentially help linter
+				const singleQuoteFenceMermaid = "\'\'\'mermaid";
+				const backtickFenceMermaid = "```mermaid";
+				const singleQuoteFence = "\'\'\'";
+				const backtickFence = "```";
+
+				if (rawMermaidSyntax.startsWith(singleQuoteFenceMermaid)) { 
+					rawMermaidSyntax = rawMermaidSyntax.substring(singleQuoteFenceMermaid.length).trimStart();
+				} else if (rawMermaidSyntax.startsWith(backtickFenceMermaid)) {
+					rawMermaidSyntax = rawMermaidSyntax.substring(backtickFenceMermaid.length).trimStart();
 				}
-				if (rawMermaidSyntax.endsWith('```')) {
-					rawMermaidSyntax = rawMermaidSyntax.substring(0, rawMermaidSyntax.length - '```'.length).trimEnd();
+
+				if (rawMermaidSyntax.endsWith(singleQuoteFence)) { 
+					rawMermaidSyntax = rawMermaidSyntax.substring(0, rawMermaidSyntax.length - singleQuoteFence.length).trimEnd();
+				} else if (rawMermaidSyntax.endsWith(backtickFence)) {
+					rawMermaidSyntax = rawMermaidSyntax.substring(0, rawMermaidSyntax.length - backtickFence.length).trimEnd();
 				}
 
 				console.log("Cleaned Mermaid Syntax:", rawMermaidSyntax);
-
-				// Define renderId outside the try block so it's accessible in catch
 				const renderId = 'mermaid-svg-' + Date.now();
 
 				try {
 					if (!rawMermaidSyntax || typeof rawMermaidSyntax !== 'string' || rawMermaidSyntax.trim() === '') {
 						console.warn("No valid diagram syntax found to render.");
-						container.innerHTML = '<p style="color:orange;">No diagram syntax found to render.</p>';
+						container.innerHTML = '<p style="color:orange; padding: 10px;">No diagram syntax found to render.</p>';
 						loadingSpinner.style.display = 'none';
-						// Attempt to remove the (unused) element if mermaid.render was skipped
 						document.getElementById(renderId)?.remove();
 						return;
 					}
 
-					// Use mermaid.render to generate SVG directly
 					const result = await mermaid.render(renderId, rawMermaidSyntax);
 					console.log('Mermaid.render result:', result);
-
-					// Attempt to remove the element mermaid might have added to the body,
-					// regardless of whether the SVG content is valid.
 					document.getElementById(renderId)?.remove();
 
 					if (!result || typeof result !== 'object') {
@@ -158,26 +320,22 @@
 							errorDiv.textContent = 'Mermaid rendering failed internally (invalid result object).\n\nSyntax:\n' + rawMermaidSyntax;
 							errorDiv.style.display = 'block';
 						}
-						container.innerHTML = '<p style="color:red;">Failed to render diagram. Internal mermaid error. Check console.</p><button id="regenerate-btn" class="regenerate-button">Try Regenerating Diagram</button>';
+						container.innerHTML = '<p style="color:red; padding: 10px;">Failed to render diagram. Internal mermaid error. Check console.</p><button id="regenerate-btn" class="regenerate-button">Try Regenerating Diagram</button>';
+						document.getElementById('regenerate-btn')?.addEventListener('click', () => vscode.postMessage({ type: 'regenerateDiagram' }));
 						loadingSpinner.style.display = 'none';
-						document.getElementById('regenerate-btn')?.addEventListener('click', () => {
-							vscode.postMessage({ type: 'regenerateDiagram' });
-						});
 						return;
 					}
 
 					const svg = result?.svg;
-
 					if (typeof svg === 'string' && svg.trim() !== '') {
 						console.log('Mermaid rendering successful, inserting SVG.');
 						container.innerHTML = svg;
-						loadingSpinner.style.display = 'none';
+						applyTransform();
 						const bindFunctions = result?.bindFunctions;
 						if (bindFunctions) {
 							console.log('Applying bindFunctions.');
-							bindFunctions(container);
+							bindFunctions(container.querySelector('svg'));
 						}
-						// Update state to indicate successful render
 						state.rendered = true;
 						vscode.setState(state);
 					} else {
@@ -186,62 +344,46 @@
 							errorDiv.textContent = 'Mermaid rendering failed to produce valid SVG.\n\nSyntax:\n' + rawMermaidSyntax;
 							errorDiv.style.display = 'block';
 						}
-						container.innerHTML = '<p style="color:red;">Failed to render diagram. SVG output was invalid. Check syntax and Developer Tools console.</p><button id="regenerate-btn" class="regenerate-button">Try Regenerating Diagram</button>';
-						loadingSpinner.style.display = 'none';
-						document.getElementById('regenerate-btn')?.addEventListener('click', () => {
-							vscode.postMessage({ type: 'regenerateDiagram' });
-						});
+						container.innerHTML = '<p style="color:red; padding: 10px;">Failed to render diagram. SVG output was invalid. Check syntax and Developer Tools console.</p><button id="regenerate-btn" class="regenerate-button">Try Regenerating Diagram</button>';
+						document.getElementById('regenerate-btn')?.addEventListener('click', () => vscode.postMessage({ type: 'regenerateDiagram' }));
 					}
-
 				} catch (error) {
 					console.error('Mermaid rendering error caught:', error);
-					// Attempt to remove the element mermaid might have added, even if an error occurred.
 					document.getElementById(renderId)?.remove();
-					
 					if (errorDiv) {
 						errorDiv.textContent = 'Mermaid Syntax Error: ' + (error?.message || String(error)) + '\n\nSyntax:\n' + rawMermaidSyntax;
 						errorDiv.style.display = 'block';
 					}
-					container.innerHTML = '<p style="color:red;">Error rendering diagram. Check syntax and Developer Tools console (Developer: Open Webview Developer Tools).</p><button id="regenerate-btn" class="regenerate-button">Try Regenerating Diagram</button>';
+					container.innerHTML = '<p style="color:red; padding: 10px;">Error rendering diagram. Check syntax and Developer Tools console (Developer: Open Webview Developer Tools).</p><button id="regenerate-btn" class="regenerate-button">Try Regenerating Diagram</button>';
+					document.getElementById('regenerate-btn')?.addEventListener('click', () => vscode.postMessage({ type: 'regenerateDiagram' }));
+				} finally {
 					loadingSpinner.style.display = 'none';
-					document.getElementById('regenerate-btn')?.addEventListener('click', () => {
-						vscode.postMessage({ type: 'regenerateDiagram' });
-					});
 				}
 			}
 
-			// Listen for messages from the extension
 			window.addEventListener('message', event => {
 				const message = event.data;
 				switch (message.type) {
 					case 'updateDiagram':
-						// Reset rendered state when new diagram code arrives
 						state.rendered = false;
 						vscode.setState(state);
 						
-						// Update the diagram code
 						const mermaidPre = document.querySelector('pre.mermaid');
-						const diagramSourceDiv = document.querySelector('.source-code#diagram-source');
-						if (mermaidPre && diagramSourceDiv) {
-							mermaidPre.textContent = message.code;
-							diagramSourceDiv.textContent = message.code;
+						const modalSourceContent = document.getElementById('modal-source-content');
+						const modalPromptContent = document.getElementById('modal-prompt-content');
+
+						if (mermaidPre) mermaidPre.textContent = message.code;
+						if (modalSourceContent) modalSourceContent.textContent = message.code;
+						
+						if (modalPromptContent) {
+							modalPromptContent.textContent = message.prompt || 'Prompt not available.';
 						}
-						// Update the prompt text if provided
-						if (message.prompt) {
-							const promptDiv = document.querySelector('.source-code#diagram-prompt');
-							if (promptDiv) {
-								promptDiv.textContent = message.prompt;
-							}
-						}
-						// Re-render the diagram
 						renderMermaid();
 						break;
 					case 'updateProgressStatus':
 						const loadingTextElement = document.querySelector('#loading-spinner .loading-text');
-						if (loadingTextElement) {
-							loadingTextElement.textContent = message.text;
-						}
-						// Ensure spinner is visible when progress updates, unless diagram is already showing
+						if (loadingTextElement) loadingTextElement.textContent = message.text;
+						
 						const loadingSpinner = document.getElementById('loading-spinner');
 						const mermaidContainer = document.getElementById('mermaid-container');
 						if (loadingSpinner && (!mermaidContainer || !mermaidContainer.querySelector('svg'))) {
@@ -251,40 +393,86 @@
 				}
 			});
 
-			 // Initial render logic:
-			 // Replace the old conditional initial render logic.
-			 // This new logic ensures that renderMermaid() is always called on load,
-			 // and the 'rendered' state is correctly initialized for the current session.
 			window.addEventListener('load', () => {
-				// Reset rendered state for this new webview session.
-				// This ensures that if the initial content is empty or fails to render,
-				// the state correctly reflects that no diagram is currently successfully rendered.
 				state.rendered = false;
-				vscode.setState(state); // Persist this reset state.
+				vscode.setState(state);
 				
-				renderMermaid(); // Attempt to render initial content.
-								 // renderMermaid will update and persist state again on success.
+				document.getElementById('view-source-btn').addEventListener('click', () => openModal('source-modal'));
+				document.getElementById('view-prompt-btn').addEventListener('click', () => openModal('prompt-modal'));
+
+				document.querySelectorAll('.close-btn').forEach(btn => {
+					btn.addEventListener('click', (e) => {
+						const modalId = e.target.dataset.modalId;
+						if (modalId) closeModal(modalId);
+					});
+				});
+				window.addEventListener('click', (event) => {
+					if (event.target.classList.contains('modal')) {
+						closeModal(event.target.id);
+					}
+				});
+
+				document.getElementById('zoom-in-btn').addEventListener('click', zoomIn);
+				document.getElementById('zoom-out-btn').addEventListener('click', zoomOut);
+				document.getElementById('reset-view-btn').addEventListener('click', resetView);
+
+				const diagramContainer = document.getElementById('diagram-container');
+				diagramContainer.addEventListener('mousedown', startPan);
+				document.addEventListener('mousemove', doPan);
+				document.addEventListener('mouseup', endPan);
+				document.addEventListener('mouseleave', (event) => {
+					if (event.buttons === 0 && isPanning) endPan();
+				});
+				
+				const initialMermaidCode = document.querySelector('pre.mermaid')?.textContent || '';
+				const initialPromptData = document.getElementById('initial-prompt-data')?.textContent || 'Prompt not available.';
+				
+				const modalSourceContent = document.getElementById('modal-source-content');
+				const modalPromptContent = document.getElementById('modal-prompt-content');
+				if (modalSourceContent) modalSourceContent.textContent = initialMermaidCode;
+				if (modalPromptContent) modalPromptContent.textContent = initialPromptData;
+
+				renderMermaid();
 			});
 		</script>
 	</head>
 	<body>
+		<div class="controls-bar">
+			<button id="view-source-btn">View Source</button>
+			<button id="view-prompt-btn">View Prompt</button>
+			<div class="zoom-controls">
+				<button id="zoom-out-btn" title="Zoom Out">-</button>
+				<button id="reset-view-btn" title="Reset View">Reset</button>
+				<button id="zoom-in-btn" title="Zoom In">+</button>
+			</div>
+		</div>
+
+		<div id="source-modal" class="modal">
+			<div class="modal-content">
+				<span class="close-btn" data-modal-id="source-modal">&times;</span>
+				<h2>Diagram Source</h2>
+				<pre id="modal-source-content"></pre>
+			</div>
+		</div>
+		<div id="prompt-modal" class="modal">
+			<div class="modal-content">
+				<span class="close-btn" data-modal-id="prompt-modal">&times;</span>
+				<h2>Diagram Prompt</h2>
+				<pre id="modal-prompt-content"></pre>
+			</div>
+		</div>
+
 		<div id="error-message" class="error-message"></div>
-		<div class="diagram-container">
+		<div class="diagram-container" id="diagram-container">
 			<div id="mermaid-container">
 			</div>
 			<div id="loading-spinner" class="loading-spinner">
 				<div class="spinner"></div>
 				<div class="loading-text">Generating diagram...</div>
 			</div>
-			<pre class="mermaid" style="display:none">${mermaidCode}</pre>
 		</div>
-		<details>
-			<summary>Show Diagram Source</summary>
-			<div class="source-code" id="diagram-source">${mermaidCode}</div>
-		</details>
-		<details>
-			<summary>Show Diagram Prompt</summary>
-			<div class="source-code" id="diagram-prompt">${promptText}</div>
-		</details>
+		
+		<pre class="mermaid" style="display:none">${mermaidCode}</pre>
+		<pre id="initial-prompt-data" style="display:none">${promptText}</pre>
 	</body>
 </html>
