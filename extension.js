@@ -1,6 +1,7 @@
 const vscode = require('vscode');
 const path = require('path');
 const parseGitConfig = require('parse-git-config').sync;
+const fs = require('fs');
 
 /**
  * @param {vscode.ExtensionContext} context
@@ -83,12 +84,14 @@ function activate(context) {
         {
           // Enable scripts in the webview
           enableScripts: true,
+          retainContextWhenHidden: true, // Retain context when webview is hidden
           localResourceRoots: [vscode.Uri.file(path.join(context.extensionPath, 'media'))]
         }
       );
 
       // Set the HTML content
-      panel.webview.html = getWebviewContentForDiagram();
+      const webviewContentPath = vscode.Uri.file(path.join(context.extensionPath, 'media', 'diagramWebview.html'));
+      panel.webview.html = fs.readFileSync(webviewContentPath.fsPath, 'utf8');
 
       // Handle messages from the webview
       panel.webview.onDidReceiveMessage(
@@ -666,210 +669,6 @@ function getWebviewContent(body) {
 </html>`;
 }
 
-function getWebviewContentForDiagram() {
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src vscode-resource: 'unsafe-inline' 'self'; style-src vscode-resource: 'unsafe-inline'; img-src vscode-resource: data:;">
-    <title>Generate Mermaid Diagram</title>
-    <style>
-      body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol"; }
-      .spinner {
-        display: inline-block;
-        border: 3px solid #f3f3f3; /* Light grey */
-        border-top: 3px solid #3498db; /* Blue */
-        border-radius: 50%;
-        width: 16px;
-        height: 16px;
-        animation: spin 1s linear infinite;
-        margin-left: 10px;
-        vertical-align: middle;
-      }
-      @keyframes spin {
-        0% { transform: rotate(0deg); }
-        100% { transform: rotate(360deg); }
-      }
-      #progressStatus {
-        margin-top: 15px;
-        padding: 10px;
-        border: 1px solid #ccc;
-        background-color: #f9f9f9;
-        min-height: 20px; /* Adjusted min-height */
-        white-space: pre-wrap; /* Allows line breaks and preserves whitespace */
-        font-family: monospace;
-        font-size: 0.9em;
-        border-radius: 4px;
-      }
-      textarea {
-        width: 100%;
-        box-sizing: border-box; /* Include padding and border in the element's total width and height */
-        margin-top: 5px;
-        padding: 8px;
-        border-radius: 4px;
-        border: 1px solid #ccc;
-      }
-      button {
-        padding: 8px 15px;
-        margin-top: 10px;
-        margin-right: 5px;
-        border: none;
-        background-color: #007acc;
-        color: white;
-        border-radius: 4px;
-        cursor: pointer;
-      }
-      button:hover {
-        background-color: #005f9e;
-      }
-      h1, h3 {
-        color: #333;
-      }
-    </style>
-    <script>
-      const vscodeApi = acquireVsCodeApi();
-
-      function showCallHierarchyItems() {
-        const spinner = document.getElementById('loadingSpinner');
-        if(spinner) spinner.style.display = 'inline-block';
-        document.getElementById('progressStatus').textContent = 'Fetching call hierarchy items...';
-        vscodeApi.postMessage({ command: 'getCallHierarchyItems' });
-      }
-
-      function showRecursiveOutgoingCalls() {
-        const spinnerRecursive = document.getElementById('loadingSpinnerRecursive');
-        if(spinnerRecursive) spinnerRecursive.style.display = 'inline-block';
-        document.getElementById('progressStatus').textContent = 'Fetching recursive outgoing calls... (This may take a moment)';
-        vscodeApi.postMessage({ command: 'getRecursiveOutgoingCalls' });
-      }
-
-      function generateMermaidPrompt() {
-        const spinnerMermaid = document.getElementById('loadingSpinnerMermaid');
-        if(spinnerMermaid) spinnerMermaid.style.display = 'inline-block';
-        document.getElementById('progressStatus').textContent = 'Generating Mermaid diagram prompt...';
-        vscodeApi.postMessage({ command: 'generateMermaidDiagramPrompt' });
-      }
-
-      function generateClaudeAIDiagramInWebview() {
-        const promptText = document.getElementById('mermaidDiagramPrompt').value;
-        const progressStatusDiv = document.getElementById('progressStatus');
-        const claudeDiagramTextarea = document.getElementById('claudeDiagramTextarea');
-        const spinnerClaude = document.getElementById('loadingSpinnerClaude');
-
-        if (!promptText || promptText.trim() === '') {
-          const errorMsg = 'Error: Prompt is empty. Please generate a prompt first or enter one in the "Mermaid Diagram Prompt" area.';
-          if(progressStatusDiv) progressStatusDiv.textContent = errorMsg;
-          if(claudeDiagramTextarea) claudeDiagramTextarea.value = errorMsg;
-          if(spinnerClaude) spinnerClaude.style.display = 'none';
-          return;
-        }
-
-        if(spinnerClaude) spinnerClaude.style.display = 'inline-block';
-        if(claudeDiagramTextarea) claudeDiagramTextarea.value = ''; // Clear previous output
-        if(progressStatusDiv) progressStatusDiv.textContent = 'Requesting Claude AI diagram generation with custom prompt...';
-        vscodeApi.postMessage({ command: 'generateClaudeDiagram', payload: { prompt: promptText } });
-      }
-
-      window.addEventListener('message', event => {
-        const message = event.data;
-        const progressStatusDiv = document.getElementById('progressStatus');
-
-        const spinners = {
-            'callHierarchyItems': document.getElementById('loadingSpinner'),
-            'recursiveOutgoingCalls': document.getElementById('loadingSpinnerRecursive'),
-            'mermaidDiagramPrompt': document.getElementById('loadingSpinnerMermaid'),
-            'claudeDiagram': document.getElementById('loadingSpinnerClaude')
-        };
-
-        if (message.command === 'callHierarchyItemsData' || message.command === 'callHierarchyItemsError') {
-            if(spinners.callHierarchyItems) spinners.callHierarchyItems.style.display = 'none';
-        }
-        if (message.command === 'recursiveOutgoingCallsData' || message.command === 'recursiveOutgoingCallsError') {
-            if(spinners.recursiveOutgoingCalls) spinners.recursiveOutgoingCalls.style.display = 'none';
-        }
-        if (message.command === 'mermaidDiagramPromptData' || message.command === 'mermaidDiagramPromptError') {
-            if(spinners.mermaidDiagramPrompt) spinners.mermaidDiagramPrompt.style.display = 'none';
-        }
-         if (message.command === 'claudeDiagramData' || message.command === 'claudeDiagramError') {
-            if(spinners.claudeDiagram) spinners.claudeDiagram.style.display = 'none';
-        }
-
-        switch (message.command) {
-          case 'callHierarchyItemsData':
-            document.getElementById('callHierarchyItems').value = JSON.stringify(message.payload, null, 2);
-            if (progressStatusDiv) progressStatusDiv.textContent = 'Call hierarchy items loaded.';
-            break;
-          case 'callHierarchyItemsError':
-            document.getElementById('callHierarchyItems').value = message.payload;
-            if (progressStatusDiv) progressStatusDiv.textContent = 'Error loading call hierarchy items: ' + message.payload;
-            break;
-          case 'recursiveOutgoingCallsData':
-            document.getElementById('recursiveOutgoingCalls').value = JSON.stringify(message.payload, null, 2);
-            if (progressStatusDiv) progressStatusDiv.textContent = 'Recursive outgoing calls loaded and cached.';
-            break;
-          case 'recursiveOutgoingCallsError':
-            document.getElementById('recursiveOutgoingCalls').value = message.payload;
-            if (progressStatusDiv) progressStatusDiv.textContent = 'Error loading recursive outgoing calls: ' + message.payload;
-            break;
-          case 'mermaidDiagramPromptData':
-            document.getElementById('mermaidDiagramPrompt').value = message.payload;
-            if (progressStatusDiv) progressStatusDiv.textContent = 'Mermaid diagram prompt generated and ready for editing.';
-            break;
-          case 'mermaidDiagramPromptError':
-            document.getElementById('mermaidDiagramPrompt').value = message.payload;
-            if (progressStatusDiv) progressStatusDiv.textContent = 'Error generating Mermaid prompt: ' + message.payload;
-            break;
-          case 'claudeDiagramData':
-            document.getElementById('claudeDiagramTextarea').value = message.payload;
-            if (progressStatusDiv) progressStatusDiv.textContent = 'Claude AI diagram generated successfully from custom prompt.';
-            if(spinners.claudeDiagram) spinners.claudeDiagram.style.display = 'none';
-            break;
-          case 'claudeDiagramError':
-            document.getElementById('claudeDiagramTextarea').value = message.payload;
-            if (progressStatusDiv) progressStatusDiv.textContent = 'Error generating Claude AI diagram: ' + message.payload;
-            if(spinners.claudeDiagram) spinners.claudeDiagram.style.display = 'none';
-            break;
-          case 'updateProgressStatus':
-            if (progressStatusDiv) progressStatusDiv.textContent = message.payload;
-            break;
-        }
-      });
-    </script>
-</head>
-<body>
-    <h1>Generate Mermaid Diagram</h1>
-
-    <button onclick="showCallHierarchyItems()">Show Call Hierarchy Items</button>
-    <div id="loadingSpinner" class="spinner" style="display:none;"></div>
-    <br>
-    <textarea id="callHierarchyItems" style="height:150px;" readonly></textarea>
-    <br><br>
-
-    <button onclick="showRecursiveOutgoingCalls()">Get & Cache Recursive Call Hierarchy</button>
-    <div id="loadingSpinnerRecursive" class="spinner" style="display:none;"></div>
-    <br>
-    <textarea id="recursiveOutgoingCalls" style="height:200px;" readonly placeholder="Call hierarchy data will be shown here and cached for other operations."></textarea>
-    <br><br>
-
-    <button onclick="generateMermaidPrompt()">Generate Mermaid Diagram Prompt (populates below)</button>
-    <div id="loadingSpinnerMermaid" class="spinner" style="display:none;"></div>
-    <br>
-    <textarea id="mermaidDiagramPrompt" style="height:250px;" placeholder="Mermaid diagram prompt will appear here. You can edit it before generating the Claude AI diagram."></textarea>
-    <br><br>
-
-    <button onclick="generateClaudeAIDiagramInWebview()">Generate Claude AI Diagram (uses edited prompt from above)</button>
-    <div id="loadingSpinnerClaude" class="spinner" style="display:none;"></div>
-    <br>
-    <textarea id="claudeDiagramTextarea" style="height:300px;" readonly placeholder="Claude AI generated Mermaid diagram (from the prompt above) will appear here."></textarea>
-    <br><br>
-
-    <h3>Progress Status:</h3>
-    <div id="progressStatus">Click a button to start...</div>
-
-</body>
-</html>`;
-}
-
 /**
  * Convert SSH or Git URLs to HTTPS
  * @param {string} url
@@ -958,7 +757,6 @@ module.exports = {
   activate,
   deactivate,
   getWebviewContent,
-  getWebviewContentForDiagram,
   getCallHierarchyData,
   generateSequenceDiagram, // Kept for potential other uses or direct full generation
   invokeClaudeLlmWithPrompt, // New function for direct LLM call with prompt
