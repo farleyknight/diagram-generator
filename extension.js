@@ -129,7 +129,8 @@ function activate(context) {
                   panel.webview.postMessage({ command: 'mermaidDiagramPromptError', payload: 'Please generate the recursive call hierarchy first.' });
                   return;
                 }
-                const prompt = await generateSequenceDiagramPrompt([panel.webview.callHierarchyData], panel);
+                const diagramType = message.payload && message.payload.diagramType ? message.payload.diagramType : 'sequence'; // Default to sequence
+                const prompt = await generateSequenceDiagramPrompt([panel.webview.callHierarchyData], panel, diagramType);
                 panel.webview.postMessage({ command: 'mermaidDiagramPromptData', payload: prompt });
               } catch (e) {
                 console.error('Error generating Mermaid diagram prompt:', e);
@@ -150,15 +151,10 @@ function activate(context) {
                 }
                 
                 // Call the new function that directly invokes the LLM with the provided prompt
-                const diagram = await invokeClaudeLlmWithPrompt(promptFromWebview, panel);
+                // This function will now handle sending token chunks and the end signal.
+                await invokeClaudeLlmWithPrompt(promptFromWebview, panel);
                 
-                if (diagram) {
-                  panel.webview.postMessage({ command: 'claudeDiagramData', payload: diagram });
-                } else {
-                  // invokeClaudeLlmWithPrompt should have already sent appropriate error messages.
-                  // This is a fallback if it somehow returns null without a specific claudeDiagramError.
-                  // console.log('invokeClaudeLlmWithPrompt returned null/undefined without specific error for claudeDiagramError');
-                }
+                // No longer need to handle 'claudeDiagramData' here as it's done via streaming.
               } catch (e) {
                 console.error('Error in generateClaudeDiagram case:', e);
                 const errorMsg = `Error generating Claude AI diagram: ${e.message}`;
@@ -317,7 +313,7 @@ async function generateSequenceDiagram(editor, panel, existingHierarchyData) {
  * Invokes the Claude LLM with a given prompt text.
  * @param {string} promptText The prompt to send to the LLM.
  * @param {vscode.WebviewPanel} panel The webview panel to send progress updates to.
- * @returns {Promise<string|null>} The generated diagram text or null on failure.
+ * @returns {Promise<void>} No return value, handles streaming responses.
  */
 async function invokeClaudeLlmWithPrompt(promptText, panel) {
   if (!promptText || promptText.trim() === '') {
@@ -327,7 +323,7 @@ async function invokeClaudeLlmWithPrompt(promptText, panel) {
       panel.webview.postMessage({ command: 'updateProgressStatus', payload: msg });
       panel.webview.postMessage({ command: 'claudeDiagramError', payload: msg });
     }
-    return null;
+    return;
   }
 
   try {
@@ -342,7 +338,7 @@ async function invokeClaudeLlmWithPrompt(promptText, panel) {
         panel.webview.postMessage({ command: 'updateProgressStatus', payload: msg });
         panel.webview.postMessage({ command: 'claudeDiagramError', payload: msg });
       }
-      return null;
+      return;
     }
 
     const models = await vscode.lm.selectChatModels({ family: 'claude-3.5-sonnet' });
@@ -354,7 +350,7 @@ async function invokeClaudeLlmWithPrompt(promptText, panel) {
         panel.webview.postMessage({ command: 'updateProgressStatus', payload: errorMsg });
         panel.webview.postMessage({ command: 'claudeDiagramError', payload: errorMsg });
       }
-      return null;
+      return;
     }
 
     const [model] = models;
@@ -368,28 +364,30 @@ async function invokeClaudeLlmWithPrompt(promptText, panel) {
       justification: 'Generate a Mermaid sequence diagram from user-provided prompt (originally from Java call hierarchy)'
     }, tokenSource.token);
 
-    let diagramText = '';
+    let hasReceivedData = false;
     if (panel && panel.webview) {
-      panel.webview.postMessage({ command: 'updateProgressStatus', payload: 'Receiving response from language model...' });
+      // Initial message before streaming starts, handled by the webview's 'claudeDiagramTokenChunk'
     }
     for await (const textChunk of response.text) {
-      diagramText += textChunk;
+      if (panel && panel.webview) {
+        panel.webview.postMessage({ command: 'claudeDiagramTokenChunk', payload: textChunk });
+      }
+      hasReceivedData = true;
     }
 
-    if (!diagramText || diagramText.trim() === '') {
+    if (!hasReceivedData) {
       const errorMsg = 'No response or empty response from language model.';
       vscode.window.showInformationMessage(errorMsg);
       if (panel && panel.webview) {
         panel.webview.postMessage({ command: 'updateProgressStatus', payload: errorMsg });
         panel.webview.postMessage({ command: 'claudeDiagramError', payload: errorMsg });
       }
-      return null;
+      return;
     }
 
     if (panel && panel.webview) {
-      panel.webview.postMessage({ command: 'updateProgressStatus', payload: 'Language model response received. Diagram generated from custom prompt.' });
+      panel.webview.postMessage({ command: 'claudeDiagramStreamEnd' });
     }
-    return diagramText;
   } catch (error) {
     console.error('Error in invokeClaudeLlmWithPrompt:', error);
     const errorMessage = error.message || 'An unknown error occurred during diagram generation with the language model.';
@@ -398,7 +396,6 @@ async function invokeClaudeLlmWithPrompt(promptText, panel) {
       panel.webview.postMessage({ command: 'updateProgressStatus', payload: `Error generating diagram with LLM: ${errorMessage}` });
       panel.webview.postMessage({ command: 'claudeDiagramError', payload: `Error generating diagram with LLM: ${errorMessage}` });
     }
-    return null;
   }
 }
 
@@ -612,11 +609,12 @@ function collectSources(data, sources) {
  * Generates a prompt for sequence diagram generation based on call hierarchy data
  * @param {object[]} hierarchyData The call hierarchy data
  * @param {vscode.WebviewPanel | null} panel The webview panel to send progress updates to. Can be null if no progress updates are needed.
+ * @param {string} diagramType The type of diagram to generate ('sequence' or 'flowchart').
  * @returns {Promise<string>} The generated prompt
  */
-async function generateSequenceDiagramPrompt(hierarchyData, panel) {
+async function generateSequenceDiagramPrompt(hierarchyData, panel, diagramType = 'sequence') {
   if (panel && panel.webview) {
-    panel.webview.postMessage({ command: 'updateProgressStatus', payload: 'Generating sequence diagram prompt...' });
+    panel.webview.postMessage({ command: 'updateProgressStatus', payload: `Generating ${diagramType} diagram prompt...` });
   }
 
   // Collect all non-empty sources with their filenames, class names and annotations
@@ -633,14 +631,28 @@ async function generateSequenceDiagramPrompt(hierarchyData, panel) {
   }
 
   // Create the prompt
-  const prompt = [
+  let promptHeader = '';
+  if (diagramType === 'flowchart') {
+    promptHeader =
+    'Please create a Mermaid Flowchart using these Java classes. ' +
+    'Use flowchart LR (left to right) direction. ' +
+    'Group related methods by class using subgraphs. ' +
+    'Show the control flow between methods. ' +
+    'Style external calls differently using dashed lines. ' +
+    'Show URLs and REST API calls. Show SQL queries. ' +
+    'Use the [(Database)] syntax. ' +
+    'Include control flow (if/else, for/while) and add notes for important logic.\n';
+  } else { // Default to sequence diagram
+    promptHeader =
     'Please create a Mermaid Sequence Diagram using these Java classes. ' +
 		'The first entry begins the diagram. ' +
 		'Feel free to add multiple levels (6 or more) if it makes sense. ' +
 		'Please include each method call in your diagram. ' +
 		'Include "Note over" in several places to call out what functionality is doing. ' +
-		'Include if/else conditions, and include details about SQL queries. \n'
-  ];
+		'Include if/else conditions, and include details about SQL queries. \n';
+  }
+
+  const prompt = [promptHeader];
 
   sources.forEach(({source, filename, className, classAnnotations}) => {
     // Extract method annotations from the source

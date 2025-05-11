@@ -78,7 +78,8 @@
         const spinnerMermaid = document.getElementById('loadingSpinnerMermaid');
         if(spinnerMermaid) spinnerMermaid.style.display = 'inline-block';
         document.getElementById('progressStatus').textContent = 'Generating Mermaid diagram prompt...';
-        vscodeApi.postMessage({ command: 'generateMermaidDiagramPrompt' });
+        const diagramType = document.getElementById('diagramTypeSelector').value; // Get selected diagram type
+        vscodeApi.postMessage({ command: 'generateMermaidDiagramPrompt', payload: { diagramType: diagramType } }); // Pass diagram type
       }
 
       function generateClaudeAIDiagramInWebview() {
@@ -124,6 +125,7 @@
       window.addEventListener('message', event => {
         const message = event.data;
         const progressStatusDiv = document.getElementById('progressStatus');
+        const claudeDiagramTextarea = document.getElementById('claudeDiagramTextarea');
 
         const spinners = {
             'callHierarchyItems': document.getElementById('loadingSpinner'),
@@ -175,6 +177,15 @@
             if (progressStatusDiv) progressStatusDiv.textContent = 'Claude AI diagram generated successfully from custom prompt.';
             if(spinners.claudeDiagram) spinners.claudeDiagram.style.display = 'none';
             break;
+          case 'claudeDiagramTokenChunk':
+            if (claudeDiagramTextarea) claudeDiagramTextarea.value += message.payload;
+            if (progressStatusDiv) progressStatusDiv.textContent = 'Claude AI diagram streaming...';
+            // Spinner remains visible during streaming
+            break;
+          case 'claudeDiagramStreamEnd':
+            if (progressStatusDiv) progressStatusDiv.textContent = 'Claude AI diagram stream finished.';
+            if(spinners.claudeDiagram) spinners.claudeDiagram.style.display = 'none';
+            break;
           case 'claudeDiagramError':
             document.getElementById('claudeDiagramTextarea').value = message.payload;
             if (progressStatusDiv) progressStatusDiv.textContent = 'Error generating Claude AI diagram: ' + message.payload;
@@ -203,6 +214,10 @@
     <br><br>
 
     <button onclick="generateMermaidPrompt()">Generate Mermaid Diagram Prompt (populates below)</button>
+    <select id="diagramTypeSelector" style="margin-left: 10px;">
+        <option value="sequence">Sequence Diagram</option>
+        <option value="flowchart">Flowchart Diagram</option>
+    </select>
     <div id="loadingSpinnerMermaid" class="spinner" style="display:none;"></div>
     <br>
     <textarea id="mermaidDiagramPrompt" style="height:250px;" placeholder="Mermaid diagram prompt will appear here. You can edit it before generating the Claude AI diagram."></textarea>
