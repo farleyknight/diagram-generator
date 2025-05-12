@@ -84,109 +84,40 @@ function activate(context) {
       );
 
       // Set the HTML content
-      const webviewContentPath = vscode.Uri.file(path.join(context.extensionPath, 'media', 'diagramWebview.html'));
+      const webviewContentPath = vscode.Uri.file(path.join(context.extensionPath, 'media', 'diagramGeneratorWebview.html'));
       panel.webview.html = fs.readFileSync(webviewContentPath.fsPath, 'utf8');
 
       // Handle messages from the webview
       panel.webview.onDidReceiveMessage(
         async message => {
+          // Delegate to helper functions based on command
           switch (message.command) {
             case 'getCallHierarchyItems':
-              try {
-                const items = /** @type {vscode.CallHierarchyItem[]} */ (
-                  await vscode.commands.executeCommand('vscode.prepareCallHierarchy', uri, position)
-                );
-                panel.webview.postMessage({ command: 'callHierarchyItemsData', payload: items });
-              } catch (e) {
-                console.error('Error preparing call hierarchy:', e);
-                vscode.window.showErrorMessage('Error fetching call hierarchy items.');
-                panel.webview.postMessage({ command: 'callHierarchyItemsError', payload: 'Error fetching call hierarchy items. Check the console for details.' });
-              }
-              return;
+              await handleGetCallHierarchyItems(message, panel, uri, position, context);
+              break;
             case 'getRecursiveOutgoingCalls':
-              try {
-                const hierarchyData = await getCallHierarchyData(uri, position, panel, context);
-                if (hierarchyData) {
-                  panel.webview.postMessage({ command: 'recursiveOutgoingCallsData', payload: hierarchyData });
-                } else {
-                  panel.webview.postMessage({ command: 'recursiveOutgoingCallsError', payload: 'Failed to retrieve call hierarchy data.' });
-                }
-              } catch (e) {
-                console.error('Error building recursive call hierarchy:', e);
-                vscode.window.showErrorMessage('Error building recursive call hierarchy.');
-                panel.webview.postMessage({ command: 'recursiveOutgoingCallsError', payload: 'Error building recursive call hierarchy. Check the console for details.' });
-              }
-              return;
+              await handleGetRecursiveOutgoingCalls(message, panel, uri, position, context);
+              break;
             case 'generateMermaidDiagramPrompt':
-              try {
-                if (!panel.webview.callHierarchyData) {
-                  panel.webview.postMessage({ command: 'mermaidDiagramPromptError', payload: 'Please generate the recursive call hierarchy first.' });
-                  return;
-                }
-                const diagramType = message.payload && message.payload.diagramType ? message.payload.diagramType : 'sequence'; // Default to sequence
-                const prompt = await generateSequenceDiagramPrompt([panel.webview.callHierarchyData], panel, diagramType, context); // Pass context
-                panel.webview.postMessage({ command: 'mermaidDiagramPromptData', payload: prompt });
-              } catch (e) {
-                console.error('Error generating Mermaid diagram prompt:', e);
-                vscode.window.showErrorMessage('Error generating Mermaid diagram prompt.');
-                panel.webview.postMessage({ command: 'mermaidDiagramPromptError', payload: 'Error generating Mermaid diagram prompt. Check the console for details.' });
-              }
-              return;
-            case 'generateClaudeDiagram': // New case for Claude AI Diagram
-              try {
-                const promptFromWebview = message.payload && message.payload.prompt;
-                if (!promptFromWebview || promptFromWebview.trim() === '') {
-                  const errorMsg = 'Prompt is empty. Cannot generate Claude AI diagram.';
-                  if (panel.webview) {
-                    panel.webview.postMessage({ command: 'updateProgressStatus', payload: errorMsg });
-                    panel.webview.postMessage({ command: 'claudeDiagramError', payload: errorMsg });
-                  }
-                  return;
-                }
-                
-                // Call the new function that directly invokes the LLM with the provided prompt
-                // This function will now handle sending token chunks and the end signal.
-                await invokeClaudeLlmWithPrompt(promptFromWebview, panel);
-                
-                // No longer need to handle 'claudeDiagramData' here as it's done via streaming.
-              } catch (e) {
-                console.error('Error in generateClaudeDiagram case:', e);
-                const errorMsg = `Error generating Claude AI diagram: ${e.message}`;
-                vscode.window.showErrorMessage(errorMsg);
-                if (panel.webview) {
-                  panel.webview.postMessage({ command: 'updateProgressStatus', payload: errorMsg });
-                  panel.webview.postMessage({ command: 'claudeDiagramError', payload: errorMsg });
-                }
-              }
-              return;
-            case 'openMermaidDisplay': // New case for opening the Mermaid display webview
-              try {
-                const { mermaidCode, promptText } = message.payload;
-                const displayPanel = vscode.window.createWebviewPanel(
-                  'mermaidDisplay',
-                  'Mermaid Diagram Display',
-                  vscode.ViewColumn.Beside, // Open in a new column
-                  {
-                    enableScripts: true,
-                    localResourceRoots: [vscode.Uri.file(path.join(context.extensionPath, 'media'))]
-                  }
-                );
-                displayPanel.webview.html = getMermaidDisplayWebviewContent(mermaidCode, promptText, context, displayPanel.webview);
-              } catch (e) {
-                console.error('Error opening Mermaid display webview:', e);
-                vscode.window.showErrorMessage('Error opening Mermaid display webview. Check console for details.');
-              }
-              return;
+              await handleGenerateMermaidDiagramPrompt(message, panel, context);
+              break;
+            case 'generateClaudeDiagram':
+              await handleGenerateClaudeDiagram(message, panel);
+              break;
+            case 'openMermaidDisplay':
+              await handleOpenMermaidDisplay(message, context);
+              break;
+            case 'openCleanedMermaidDisplay': // Added new case
+              await handleOpenMermaidDisplay(message, context); // Reusing handleOpenMermaidDisplay
+              break;
             case 'openFileInEditor':
-              if (message.payload && message.payload.filePath && message.payload.startLine) {
-                await openFileAtLocation(
-                  context, // Pass context
-                  message.payload.filePath,
-                  message.payload.startLine,
-                  message.payload.endLine || message.payload.startLine
-                );
-              }
-              return;
+              await handleOpenFileInEditor(message, context);
+              break;
+            case 'cleanupAndAddLinks':
+              await handleCleanupAndAddLinks(message, panel);
+              break;
+            default:
+              console.warn('Received unknown message command:', message.command);
           }
         },
         undefined,
@@ -196,6 +127,184 @@ function activate(context) {
   );
 
   context.subscriptions.push(showLinksDisposable, generateDiagramDisposable);
+}
+
+// Helper function for 'getCallHierarchyItems'
+async function handleGetCallHierarchyItems(message, panel, uri, position, context) {
+  try {
+    const items = /** @type {vscode.CallHierarchyItem[]} */ (
+      await vscode.commands.executeCommand('vscode.prepareCallHierarchy', uri, position)
+    );
+    panel.webview.postMessage({ command: 'callHierarchyItemsData', payload: items });
+  } catch (e) {
+    console.error('Error preparing call hierarchy:', e);
+    vscode.window.showErrorMessage('Error fetching call hierarchy items.');
+    panel.webview.postMessage({ command: 'callHierarchyItemsError', payload: 'Error fetching call hierarchy items. Check the console for details.' });
+  }
+}
+
+// Helper function for 'getRecursiveOutgoingCalls'
+async function handleGetRecursiveOutgoingCalls(message, panel, uri, position, context) {
+  try {
+    const hierarchyData = await getCallHierarchyData(uri, position, panel, context);
+    if (hierarchyData) {
+      panel.webview.postMessage({ command: 'recursiveOutgoingCallsData', payload: hierarchyData });
+    } else {
+      panel.webview.postMessage({ command: 'recursiveOutgoingCallsError', payload: 'Failed to retrieve call hierarchy data.' });
+    }
+  } catch (e) {
+    console.error('Error building recursive call hierarchy:', e);
+    vscode.window.showErrorMessage('Error building recursive call hierarchy.');
+    panel.webview.postMessage({ command: 'recursiveOutgoingCallsError', payload: 'Error building recursive call hierarchy. Check the console for details.' });
+  }
+}
+
+// Helper function for 'generateMermaidDiagramPrompt'
+async function handleGenerateMermaidDiagramPrompt(message, panel, context) {
+  try {
+    if (!panel.webview.callHierarchyData) {
+      panel.webview.postMessage({ command: 'mermaidDiagramPromptError', payload: 'Please generate the recursive call hierarchy first.' });
+      return;
+    }
+    const diagramType = message.payload && message.payload.diagramType ? message.payload.diagramType : 'sequence'; // Default to sequence
+    const prompt = await generateSequenceDiagramPrompt([panel.webview.callHierarchyData], panel, diagramType, context); // Pass context
+    panel.webview.postMessage({ command: 'mermaidDiagramPromptData', payload: prompt });
+  } catch (e) {
+    console.error('Error generating Mermaid diagram prompt:', e);
+    vscode.window.showErrorMessage('Error generating Mermaid diagram prompt.');
+    panel.webview.postMessage({ command: 'mermaidDiagramPromptError', payload: 'Error generating Mermaid diagram prompt. Check the console for details.' });
+  }
+}
+
+// Helper function for 'generateClaudeDiagram'
+async function handleGenerateClaudeDiagram(message, panel) {
+  try {
+    const promptFromWebview = message.payload && message.payload.prompt;
+    if (!promptFromWebview || promptFromWebview.trim() === '') {
+      const errorMsg = 'Prompt is empty. Cannot generate Claude AI diagram.';
+      if (panel.webview) {
+        panel.webview.postMessage({ command: 'updateProgressStatus', payload: errorMsg });
+        panel.webview.postMessage({ command: 'claudeDiagramError', payload: errorMsg });
+      }
+      return;
+    }
+    await invokeClaudeLlmWithPrompt(promptFromWebview, panel);
+  } catch (e) {
+    console.error('Error in generateClaudeDiagram case:', e);
+    const errorMsg = `Error generating Claude AI diagram: ${e.message}`;
+    vscode.window.showErrorMessage(errorMsg);
+    if (panel.webview) {
+      panel.webview.postMessage({ command: 'updateProgressStatus', payload: errorMsg });
+      panel.webview.postMessage({ command: 'claudeDiagramError', payload: errorMsg });
+    }
+  }
+}
+
+// Helper function for 'openMermaidDisplay'
+async function handleOpenMermaidDisplay(message, context) {
+  try {
+    const mermaidCode = message.payload.mermaidCode || message.payload.cleanedMermaidCode; // Modified to accept cleanedMermaidCode
+    const promptText = message.payload.promptText;
+
+    if (!mermaidCode || mermaidCode.trim() === '') { // Added check for empty or undefined mermaidCode
+      vscode.window.showErrorMessage('Error: Mermaid code is missing or empty and cannot be displayed.');
+      return;
+    }
+
+    const displayPanel = vscode.window.createWebviewPanel(
+      'mermaidDisplay',
+      'Mermaid Diagram Display',
+      vscode.ViewColumn.Beside, // Open in a new column
+      {
+        enableScripts: true,
+        localResourceRoots: [vscode.Uri.file(path.join(context.extensionPath, 'media'))]
+      }
+    );
+    displayPanel.webview.html = getMermaidDisplayWebviewContent(mermaidCode, promptText, context, displayPanel.webview);
+  } catch (e) {
+    console.error('Error opening Mermaid display webview:', e);
+    vscode.window.showErrorMessage('Error opening Mermaid display webview. Check console for details.');
+  }
+}
+
+// Helper function for 'openFileInEditor'
+async function handleOpenFileInEditor(message, context) {
+  if (message.payload && message.payload.filePath && message.payload.startLine) {
+    await openFileAtLocation(
+      context, // Pass context
+      message.payload.filePath,
+      message.payload.startLine,
+      message.payload.endLine || message.payload.startLine
+    );
+  }
+}
+
+// Helper function for 'cleanupAndAddLinks'
+async function handleCleanupAndAddLinks(message, panel) {
+  try {
+    const mermaidCode = message.payload.mermaidCode;
+    if (!mermaidCode || mermaidCode.trim() === '') {
+      panel.webview.postMessage({ command: 'cleanupAndAddLinksError', payload: 'Mermaid code is empty. Cannot process.' });
+      return;
+    }
+
+    // Convert \\n to <br>
+    let processedMermaidCode = mermaidCode.replace(/\\n/g, '<br>');
+
+    // Add quotes around strings in brackets if not already quoted
+    // Example: A[POST /api/products/{productId}/stock] -> A["POST /api/products/{productId}/stock"]
+    // Example: A["ALREADY QUOTED"] -> A["ALREADY QUOTED"] (no change)
+    processedMermaidCode = processedMermaidCode.replace(/\[(.*?)\]/g, (match, contentOriginal) => {
+      const content = contentOriginal.trim(); // Use trimmed version for logical checks
+
+      // Case 1a: Content is already a simple quoted string, e.g., "description"
+      if (content.startsWith('"') && content.endsWith('"')) {
+        return `[${contentOriginal}]`; // Preserve, using original content to keep original spacing
+      }
+      // Case 1b: Content is already a quoted string within parentheses, e.g., ("description")
+      if (content.startsWith('("') && content.endsWith('")')) {
+        return `[${contentOriginal}]`; // Preserve, using original content to keep original spacing
+      }
+
+      // Case 2: Content is already a bracketed structure, e.g., ["description"] or [subgraph ... end]
+      // This handles PC_updateStock[["..."]] becoming PC_updateStock[["..."]] (preserved)
+      // instead of PC_updateStock["["..."]"] (incorrectly re-processed).
+      if (content.startsWith('[') && content.endsWith(']')) {
+        return `[${contentOriginal}]`; // Preserve, using original content
+      }
+
+      // Case 3: Content is unquoted (e.g., description) or quoted in a way not caught above.
+      // Quote the trimmed content.
+      return `["${content}"]`;
+    });
+
+    // Add quotes around strings in pipes if not already quoted
+    // Example: |POST /api/products/{id}/stock| -> |"POST /api/products/{id}/stock"|
+    // Example: |"ALREADY QUOTED"| -> |"ALREADY QUOTED"| (no change)
+    processedMermaidCode = processedMermaidCode.replace(/\|(.*?)\|/g, (match, content) => {
+      if (content.startsWith('"') && content.endsWith('"')) {
+        return `|${content}|`; // Already quoted
+      }
+      // Handle cases like |"content" and "content"| by stripping existing quotes if they are unbalanced or partial
+      const trimmedContent = content.replace(/^"+|"+$/g, '');
+      return `|"${trimmedContent}"|`; // Add quotes
+    });
+
+    // Remove trailing whitespace from each line
+		// NOTE You must split the string using '\n' not '<br>' to remove trailing whitespace
+    processedMermaidCode = processedMermaidCode.split('\n').map(line => line.trimEnd()).join('\n');
+
+    // In a future step, this processedMermaidCode would be sent to an LLM
+    // for further cleaning and link addition. For now, we'll send
+    // the result of the newline conversion back to the webview.
+    panel.webview.postMessage({ command: 'cleanupAndAddLinksData', payload: processedMermaidCode });
+    panel.webview.postMessage({ command: 'updateProgressStatus', payload: 'Diagram newlines converted to <br> and bracketed/piped strings quoted. Ready for further LLM processing.' });
+
+  } catch (e) {
+    console.error('Error in cleanupAndAddLinks:', e);
+    vscode.window.showErrorMessage('Error processing Mermaid diagram for cleanup.');
+    panel.webview.postMessage({ command: 'cleanupAndAddLinksError', payload: `Error processing diagram: ${e.message}` });
+  }
 }
 
 /**
@@ -614,14 +723,15 @@ function isExternalPackage(detail) {
 /**
  * Recursively collects all non-empty sources, filenames, class names and annotations from hierarchy data
  * @param {object} data The hierarchy data object
- * @param {Array<{source: string, filename: string, className: string, classAnnotations: string}>} sources Array to collect data into
+ * @param {Array<{source: string, filename: string, className: string, methodNameSignature: string, classAnnotations: string}>} sources Array to collect data into
  */
 function collectSources(data, sources) {
   if (data.source && typeof data.source === 'string' && data.source.trim()) {
     sources.push({
       source: data.source.trim(),
       filename: data.location.file,
-      className: data.detail || 'Unknown Class',
+      className: data.detail || 'Unknown Class', // This is classNameDetail for generateMethodId
+      methodNameSignature: data.name || 'unknownMethod', // This is methodNameSignature for generateMethodId
       classAnnotations: data.classAnnotations || ''
     });
   }
@@ -659,8 +769,6 @@ async function generateSequenceDiagramPrompt(hierarchyData, panel, diagramType =
   }
 
   let promptHeader = '';
-  // Determine if link instructions should be provided to the LLM
-  const provideLinkInstructions = diagramType === 'flowchart-links' || diagramType === 'sequence';
 
   if (diagramType === 'flowchart') {
     promptHeader =
@@ -671,7 +779,7 @@ async function generateSequenceDiagramPrompt(hierarchyData, panel, diagramType =
     'Show the control flow between methods/classes. ' +
     'Style external calls differently using dashed lines. ' +
     'Show URLs and REST API calls. Show SQL queries. ' +
-    'Use the [(Database)] syntax. ' +
+    'Use the symbols provided. For example,  Symbol: PC' +
     'Include control flow (if/else, for/while) and add notes for important logic.\n';
   } else if (diagramType === 'flowchart-links') {
     promptHeader =
@@ -688,6 +796,8 @@ async function generateSequenceDiagramPrompt(hierarchyData, panel, diagramType =
     'Show the control flow between methods/classes. ' +
     'Style external calls differently using dashed lines.\n';
   } else if (diagramType === 'sequence') { // Default to sequence diagram with links
+    // NOTE: Mermaid sequence diagrams might not support 'click' directives for participants.
+    // The following prompt attempts to use them, but verify Mermaid documentation for current support.
     promptHeader =
     'Please create a Mermaid Sequence Diagram using these Java classes. ' +
     'The first entry begins the diagram. ' +
@@ -695,17 +805,26 @@ async function generateSequenceDiagramPrompt(hierarchyData, panel, diagramType =
     'Feel free to add multiple levels (6 or more) if it makes sense. ' +
     'Please include each method call in your diagram. ' +
     'Include "Note over" in several places to call out what functionality is doing. ' +
-    'Include if/else conditions, and include details about SQL queries. \n' +
-    'IMPORTANT: For each participant representing a class, create a click interaction using the "Link:" information provided for it. ' +
-    'The format MUST be: click ClassName.java href "vscode://file//ABSOLUTE/PATH/TO/ClassName.java" "Open ClassName.java". ' +
-    'Example: For a class ProductController.java with link information ' +
-    'Link: click ProductController.java href "vscode://file//path/to/ProductController.java" "Open ProductController.java", ' +
-    'the diagram code must include the line: click ProductController.java href "vscode://file//path/to/ProductController.java" "Open ProductController.java".\n';
+    'Include if/else conditions, and include details about SQL queries. \n';
   }
 
   const prompt = [promptHeader];
 
-  sources.forEach(({source, filename, className, classAnnotations}) => {
+  buildPromptFromSources(prompt, sources);
+
+  if (panel && panel.webview) {
+    panel.webview.postMessage({ command: 'updateProgressStatus', payload: `${diagramType} diagram prompt generated.` });
+  }
+  return prompt.join('\n');
+}
+
+/**
+ * Builds the prompt string from collected sources.
+ * @param {string[]} prompt The initial prompt array to append to.
+ * @param {Array<{source: string, filename: string, className: string, methodNameSignature: string, classAnnotations: string}>} sources Array of collected source data.
+ */
+function buildPromptFromSources(prompt, sources) {
+  sources.forEach(({source, filename, className, methodNameSignature, classAnnotations}) => {
     const methodAnnotations = source.split('\n')
       .filter(line => line.trim().startsWith('@'))
       .join('\n');
@@ -717,14 +836,16 @@ async function generateSequenceDiagramPrompt(hierarchyData, panel, diagramType =
     const baseFilename = path.basename(filename); // e.g., ProductController.java
     const absoluteFilePath = path.resolve(filename); // Ensures it's absolute
 
-    // Provide link information only for diagram types that should have links
-    if (provideLinkInstructions) {
-      // Instruct LLM to use baseFilename (e.g., ProductController.java) as the ID in the click directive.
-      const clickLink = `click ${baseFilename} href "vscode://file/${absoluteFilePath}" "Open ${baseFilename}"`;
-      prompt.push(`Link: ${clickLink}`);
-    }
+    // Generate and add the ID using both className (item.detail) and methodNameSignature (item.name)
+    const methodId = generateMethodId(className, methodNameSignature);
+    prompt.push(`ID: ${methodId}`);
+
+    // Always provide the link information for each source entry
+    const clickLink = `click ${methodId} href "vscode://file/${absoluteFilePath}" "Open ${baseFilename}"`;
+    prompt.push(`Link: ${clickLink}`);
+    
     prompt.push(`Class: ${className}`); // Actual class name from source
-    prompt.push(`Filename: ${baseFilename}`); // Base filename for LLM to use as node ID/text
+
     if (classAnnotations) {
       prompt.push('Class Annotations:');
       prompt.push(classAnnotations);
@@ -736,11 +857,49 @@ async function generateSequenceDiagramPrompt(hierarchyData, panel, diagramType =
     prompt.push(methodCode);
   });
   prompt.push('################################');
+}
 
-  if (panel && panel.webview) {
-    panel.webview.postMessage({ command: 'updateProgressStatus', payload: `${diagramType} diagram prompt generated.` });
+/**
+ * Generates a unique ID for a method based on its class detail and method signature.
+ * Example: classNameDetail="com.example.testfixture.ProductController", methodNameSignature="updateStock(Long): void" => "PC_updateStock"
+ * Example: classNameDetail="Product", methodNameSignature="getName()" => "P_getName"
+ * @param {string} classNameDetail The detail string of the class (e.g., "com.example.testfixture.ProductController" or "Product").
+ * @param {string} methodNameSignature The full signature of the method (e.g., "updateStock(Long, Map<String, Integer>) : ResponseEntity<Product>").
+ * @returns {string} The generated ID.
+ */
+function generateMethodId(classNameDetail, methodNameSignature) {
+  if (!classNameDetail || typeof classNameDetail !== 'string' || !methodNameSignature || typeof methodNameSignature !== 'string') {
+    return 'UNKNOWN_ID';
   }
-  return prompt.join('\n');
+
+  // Extract simple class name from classNameDetail
+  // e.g., "com.example.testfixture.ProductController" -> "ProductController"
+  // e.g., "ProductController" -> "ProductController"
+  const classParts = classNameDetail.split('.');
+  const simpleClassName = classParts.length > 0 ? classParts[classParts.length - 1] : '';
+
+  if (!simpleClassName) return 'UNKNOWN_CLASS_PART_FOR_ID';
+
+  // Create class abbreviation: extract uppercase letters. If none, first letter capitalized.
+  let classAbbreviation;
+  const uppercaseLetters = simpleClassName.replace(/[^A-Z]/g, '');
+  if (uppercaseLetters) {
+    classAbbreviation = uppercaseLetters;
+  } else if (simpleClassName.length > 0) {
+    classAbbreviation = simpleClassName.charAt(0).toUpperCase();
+  } else {
+    // This case should ideally not be reached if simpleClassName is validated
+    classAbbreviation = 'UNK';
+  }
+
+  // Extract actual method name from methodNameSignature
+  // e.g., "updateStock(Long, Map<String, Integer>) : ResponseEntity<Product>" -> "updateStock"
+  // e.g., "Product(String)" (constructor) -> "Product"
+  const methodName = methodNameSignature.split(/[\\(<:]/)[0].trim();
+
+  if (!methodName) return `${classAbbreviation}_UNKNOWN_METHOD_PART_FOR_ID`;
+
+  return `${classAbbreviation}_${methodName}`;
 }
 
 // Renamed getHtml to getWebviewContent to avoid confusion and for clarity
@@ -918,5 +1077,7 @@ module.exports = {
   invokeClaudeLlmWithPrompt, // New function for direct LLM call with prompt
   generateSequenceDiagramPrompt,
   getMermaidDisplayWebviewContent, // Export new function
-  openFileAtLocation // Exported for external use
+  openFileAtLocation, // Exported for external use
+  buildPromptFromSources, // Export new function
+  generateMethodId // Export new function
 };

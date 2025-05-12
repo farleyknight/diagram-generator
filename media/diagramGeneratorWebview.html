@@ -122,16 +122,56 @@
         });
       }
 
+      function cleanupAndAddLinks() {
+        const mermaidCode = document.getElementById('claudeDiagramTextarea').value;
+        const progressStatusDiv = document.getElementById('progressStatus');
+        const cleanedClaudeDiagramTextarea = document.getElementById('cleanedClaudeDiagramTextarea');
+        const spinnerCleanup = document.getElementById('loadingSpinnerCleanup');
+
+        if (!mermaidCode || mermaidCode.trim() === '') {
+          const errorMsg = 'Error: No Mermaid diagram content to clean up. Please generate a diagram first.';
+          if(progressStatusDiv) progressStatusDiv.textContent = errorMsg;
+          return;
+        }
+
+        if(spinnerCleanup) spinnerCleanup.style.display = 'inline-block';
+        if(cleanedClaudeDiagramTextarea) cleanedClaudeDiagramTextarea.value = ''; // Clear previous output
+        if(progressStatusDiv) progressStatusDiv.textContent = 'Cleaning up Mermaid diagram and adding links...';
+        vscodeApi.postMessage({ command: 'cleanupAndAddLinks', payload: { mermaidCode: mermaidCode } });
+      }
+
+      function openCleanedMermaidDisplayWebview() {
+        const cleanedMermaidCode = document.getElementById('cleanedClaudeDiagramTextarea').value;
+        const promptText = document.getElementById('mermaidDiagramPrompt').value; // Added to fetch the prompt
+        const progressStatusDiv = document.getElementById('progressStatus');
+
+        if (!cleanedMermaidCode || cleanedMermaidCode.trim() === '') {
+          const errorMsg = 'Error: No cleaned Mermaid diagram content to display. Please clean up a diagram first.';
+          if(progressStatusDiv) progressStatusDiv.textContent = errorMsg;
+          return;
+        }
+        if(progressStatusDiv) progressStatusDiv.textContent = 'Opening cleaned Mermaid diagram in new view...';
+        vscodeApi.postMessage({
+          command: 'openCleanedMermaidDisplay',
+          payload: {
+            cleanedMermaidCode: cleanedMermaidCode,
+            promptText: promptText // Added promptText to payload
+          }
+        });
+      }
+
       window.addEventListener('message', event => {
         const message = event.data;
         const progressStatusDiv = document.getElementById('progressStatus');
         const claudeDiagramTextarea = document.getElementById('claudeDiagramTextarea');
+        const cleanedClaudeDiagramTextarea = document.getElementById('cleanedClaudeDiagramTextarea');
 
         const spinners = {
             'callHierarchyItems': document.getElementById('loadingSpinner'),
             'recursiveOutgoingCalls': document.getElementById('loadingSpinnerRecursive'),
             'mermaidDiagramPrompt': document.getElementById('loadingSpinnerMermaid'),
-            'claudeDiagram': document.getElementById('loadingSpinnerClaude')
+            'claudeDiagram': document.getElementById('loadingSpinnerClaude'),
+            'cleanupAndAddLinks': document.getElementById('loadingSpinnerCleanup')
         };
 
         if (message.command === 'callHierarchyItemsData' || message.command === 'callHierarchyItemsError') {
@@ -145,6 +185,9 @@
         }
          if (message.command === 'claudeDiagramData' || message.command === 'claudeDiagramError') {
             if(spinners.claudeDiagram) spinners.claudeDiagram.style.display = 'none';
+        }
+        if (message.command === 'cleanupAndAddLinksData' || message.command === 'cleanupAndAddLinksError') {
+            if(spinners.cleanupAndAddLinks) spinners.cleanupAndAddLinks.style.display = 'none';
         }
 
         switch (message.command) {
@@ -191,6 +234,16 @@
             if (progressStatusDiv) progressStatusDiv.textContent = 'Error generating Claude AI diagram: ' + message.payload;
             if(spinners.claudeDiagram) spinners.claudeDiagram.style.display = 'none';
             break;
+          case 'cleanupAndAddLinksData':
+            document.getElementById('cleanedClaudeDiagramTextarea').value = message.payload;
+            if (progressStatusDiv) progressStatusDiv.textContent = 'Cleaned Mermaid diagram generated successfully.';
+            if(spinners.cleanupAndAddLinks) spinners.cleanupAndAddLinks.style.display = 'none';
+            break;
+          case 'cleanupAndAddLinksError':
+            document.getElementById('cleanedClaudeDiagramTextarea').value = message.payload;
+            if (progressStatusDiv) progressStatusDiv.textContent = 'Error cleaning up Mermaid diagram: ' + message.payload;
+            if(spinners.cleanupAndAddLinks) spinners.cleanupAndAddLinks.style.display = 'none';
+            break;
           case 'updateProgressStatus':
             if (progressStatusDiv) progressStatusDiv.textContent = message.payload;
             break;
@@ -216,9 +269,9 @@
 
     <button onclick="generateMermaidPrompt()">Generate Mermaid Diagram Prompt (populates below)</button>
     <select id="diagramTypeSelector" style="margin-left: 10px;">
-        <option value="sequence">Sequence Diagram</option>
         <option value="flowchart">Flowchart Diagram</option>
         <option value="flowchart-links">Flowchart with Links</option>
+        <option value="sequence">Sequence Diagram</option>        
     </select>
     <div id="loadingSpinnerMermaid" class="spinner" style="display:none;"></div>
     <br>
@@ -232,6 +285,11 @@
     <br><br>
 
     <button onclick="openMermaidDisplayWebview()">View Mermaid Diagram in New Webview</button>
+    <button onclick="cleanupAndAddLinks()">Clean up Diagram and Add Links</button> <div id="loadingSpinnerCleanup" class="spinner" style="display:none;"></div>
+    <br><br>
+    <textarea id="cleanedClaudeDiagramTextarea" style="height:300px;" placeholder="Cleaned Claude AI generated Mermaid diagram will appear here."></textarea>
+    <br><br>
+    <button onclick="openCleanedMermaidDisplayWebview()">View Cleaned Mermaid Diagram in New Webview</button>
     <br><br>
 
 </body>

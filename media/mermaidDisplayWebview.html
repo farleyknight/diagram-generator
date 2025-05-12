@@ -5,6 +5,14 @@
 		<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src ${cspSource} 'unsafe-inline' https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js; style-src ${cspSource} 'unsafe-inline'; img-src ${cspSource} data:;">
 		<script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
 		<style>
+			html, body {
+				height: 100%;
+				margin: 0;
+				padding: 0;
+				display: flex;
+				flex-direction: column;
+				overflow: hidden; /* Prevent scrollbars on body, diagram handles its own */
+			}
 			.error-message {
 				color: red;
 				font-family: monospace;
@@ -19,9 +27,12 @@
 				padding: 10px;
 				border: 1px solid #ccc;
 				position: relative;
-				min-height: 200px;
+				/* min-height: 200px; Removed to allow flex control */
 				overflow: hidden;
 				cursor: grab;
+				flex-grow: 1; /* Added to take available vertical space */
+				min-height: 0; /* Added to allow shrinking if necessary in flex context */
+				display: flex; /* Added to help manage child elements like mermaid-container */
 			}
 			#mermaid-container {
 				width: 100%;
@@ -319,25 +330,68 @@
 				
 				loadingSpinner.style.display = 'flex';
 
-				const rawMermaidSyntaxWithFence = preElement.textContent.trim();
-				let rawMermaidSyntax = rawMermaidSyntaxWithFence;
+				const fullTextContent = preElement.textContent; // Not trimmed, for accurate indexOf
+				let rawMermaidSyntax = ''; // Initialize
 
-				// Define fence strings as constants to potentially help linter
-				const singleQuoteFenceMermaid = "\'\'\'mermaid";
-				const backtickFenceMermaid = "```mermaid";
-				const singleQuoteFence = "\'\'\'";
-				const backtickFence = "```";
+				// Define fence strings
+				const backtickFenceMermaidOpen = "```mermaid";
+				const singleQuoteFenceMermaidOpen = "\'\'\'mermaid";
+				const backtickFenceClose = "```";
+				const singleQuoteFenceClose = "\'\'\'";
 
-				if (rawMermaidSyntax.startsWith(singleQuoteFenceMermaid)) { 
-					rawMermaidSyntax = rawMermaidSyntax.substring(singleQuoteFenceMermaid.length).trimStart();
-				} else if (rawMermaidSyntax.startsWith(backtickFenceMermaid)) {
-					rawMermaidSyntax = rawMermaidSyntax.substring(backtickFenceMermaid.length).trimStart();
+				let openFenceIdx = -1;
+				let openingFenceLength = 0;
+				let expectedClosingFence = "";
+
+				// --- New logic: Attempt to extract from a fenced block anywhere in the text ---
+				const idxBacktick = fullTextContent.indexOf(backtickFenceMermaidOpen);
+				const idxSingleQuote = fullTextContent.indexOf(singleQuoteFenceMermaidOpen);
+
+				if (idxBacktick !== -1 && (idxSingleQuote === -1 || idxBacktick < idxSingleQuote)) {
+					openFenceIdx = idxBacktick;
+					openingFenceLength = backtickFenceMermaidOpen.length;
+					expectedClosingFence = backtickFenceClose;
+				} else if (idxSingleQuote !== -1) {
+					openFenceIdx = idxSingleQuote;
+					openingFenceLength = singleQuoteFenceMermaidOpen.length;
+					expectedClosingFence = singleQuoteFenceClose;
 				}
 
-				if (rawMermaidSyntax.endsWith(singleQuoteFence)) { 
-					rawMermaidSyntax = rawMermaidSyntax.substring(0, rawMermaidSyntax.length - singleQuoteFence.length).trimEnd();
-				} else if (rawMermaidSyntax.endsWith(backtickFence)) {
-					rawMermaidSyntax = rawMermaidSyntax.substring(0, rawMermaidSyntax.length - backtickFence.length).trimEnd();
+				if (openFenceIdx !== -1) { // An opening "```mermaid" or "'''mermaid" was found by new logic
+					const searchStartForCloseFence = openFenceIdx + openingFenceLength;
+					const closeFenceIdx = fullTextContent.indexOf(expectedClosingFence, searchStartForCloseFence);
+					
+					if (closeFenceIdx !== -1) { // Corresponding closing fence also found
+						rawMermaidSyntax = fullTextContent.substring(searchStartForCloseFence, closeFenceIdx).trim();
+						console.log("Extracted Mermaid syntax using new (anywhere) fenced block logic:", rawMermaidSyntax);
+					} else {
+						// New logic found an opening fence but no matching closing fence.
+						// This is treated as a malformed block for the new logic. rawMermaidSyntax remains empty.
+						console.warn("New (anywhere) fenced block logic: Found opening mermaid fence ('" + fullTextContent.substring(openFenceIdx, openFenceIdx + openingFenceLength) + "'), but no corresponding closing fence ('" + expectedClosingFence + "') was found afterwards. Syntax considered malformed by this rule.");
+					}
+				} else {
+					// No "```mermaid" or "'''mermaid" opening fence found by the new (anywhere) logic.
+					// Fallback to old logic (handling fences at exact start/end, or raw code).
+					console.log("New (anywhere) fenced block logic: No opening fence found. Falling back to legacy start/end fence stripping logic.");
+					
+                    let tempSyntax = preElement.textContent.trim(); // Old logic starts with trimmed content
+                    const originalTempSyntaxForLog = tempSyntax;
+
+                    // Old logic Step 1: Strip prefix ```mermaid or '''mermaid
+                    if (tempSyntax.startsWith(singleQuoteFenceMermaidOpen)) { // Use defined constants
+                        tempSyntax = tempSyntax.substring(singleQuoteFenceMermaidOpen.length).trimStart();
+                    } else if (tempSyntax.startsWith(backtickFenceMermaidOpen)) { // Use defined constants
+                        tempSyntax = tempSyntax.substring(backtickFenceMermaidOpen.length).trimStart();
+                    }
+
+                    // Old logic Step 2: Strip suffix ``` or ''' from the result of step 1
+                    if (tempSyntax.endsWith(singleQuoteFenceClose)) { // Use defined constants
+                        tempSyntax = tempSyntax.substring(0, tempSyntax.length - singleQuoteFenceClose.length).trimEnd();
+                    } else if (tempSyntax.endsWith(backtickFenceClose)) { // Use defined constants
+                        tempSyntax = tempSyntax.substring(0, tempSyntax.length - backtickFenceClose.length).trimEnd();
+                    }
+                    rawMermaidSyntax = tempSyntax;
+                    console.log("Legacy fallback logic applied. Initial content for fallback: '", originalTempSyntaxForLog, "'. Result: '", rawMermaidSyntax, "'");
 				}
 
 				console.log("Cleaned Mermaid Syntax:", rawMermaidSyntax);
