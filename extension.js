@@ -3,6 +3,13 @@ const path = require('path');
 const fs = require('fs');
 const { handleCleanupAndAddLinks, collectSources } = require('./diagramProcessor'); // Updated import to include collectSources
 const { createWebviewPanel } = require('./webviewUtils'); // Added import
+const {
+  createFileLinksHtml,
+  buildHierarchyRecursively,
+  isPathInWorkspace,
+  isExternalPackage,
+  getClassInformation
+} = require('./callHierarchyBuilder'); // Added import for call hierarchy functions
 
 /**
  * @param {vscode.ExtensionContext} context
@@ -71,14 +78,11 @@ function activate(context) {
       // Handle messages from the webview
       panel.webview.onDidReceiveMessage(
         async message => {
-          // Delegate to helper functions based on command
+          // Use the common handler first
+          if (await handleCommonCallHierarchyMessages(message, panel, uri, position, context)) {
+            return; // Message handled by common handler
+          }
           switch (message.command) {
-            case 'getCallHierarchyItems':
-              await handleGetCallHierarchyItems(message, panel, uri, position, context);
-              break;
-            case 'getRecursiveOutgoingCalls':
-              await handleGetRecursiveOutgoingCalls(message, panel, uri, position, context);
-              break;
             case 'generateMermaidDiagramPrompt':
               await handleGenerateMermaidDiagramPrompt(message, panel, context);
               break;
@@ -96,6 +100,9 @@ function activate(context) {
               break;
             case 'cleanupAndAddLinks':
               await handleCleanupAndAddLinks(message, panel, generateMethodId); // Pass generateMethodId
+              break;
+            case 'openGojsDiagramInNewPanel': // New case added
+              await handleOpenGojsDiagramInNewPanel(message, context, panel);
               break;
             default:
               console.warn('Received unknown message command:', message.command);
@@ -136,12 +143,36 @@ function activate(context) {
       // Placeholder for GoJS specific message handling
       panel.webview.onDidReceiveMessage(
         async message => {
+          // Use the common handler first
+          if (await handleCommonCallHierarchyMessages(message, panel, uri, position, context)) {
+            return; // Message handled by common handler
+          }
           switch (message.command) {
-            case 'getCallHierarchyItems':
-              await handleGetCallHierarchyItems(message, panel, uri, position, context);
-              break;
-            case 'getRecursiveOutgoingCalls':
-              await handleGetRecursiveOutgoingCalls(message, panel, uri, position, context);
+            case 'openGojsDisplayPanel': // New case to open the GoJS display panel
+              try {
+                const displayPanel = vscode.window.createWebviewPanel(
+                  'goJsDisplay', // Identifies the type of the webview.
+                  'GoJS Diagram Display', // Title of the panel.
+                  vscode.ViewColumn.Beside, // Show in a new column.
+                  {
+                    enableScripts: true,
+                    retainContextWhenHidden: true, // Keep content when tab is hidden
+                    localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, 'media')]
+                  }
+                );
+
+                displayPanel.webview.html = getGoJsDisplayWebviewContent(context, displayPanel.webview);
+                context.subscriptions.push(displayPanel); // Ensure the panel is disposed when the extension deactivates
+
+                // Optional: If you need to send data to this new panel immediately,
+                // you might want to listen for a "ready" message from gojsDisplay.html
+                // and then post data, similar to the 'initiateGoJsGeneration' example.
+                // For now, we'll just open it.
+
+              } catch (e) {
+                console.error('Error opening GoJS display panel:', e);
+                vscode.window.showErrorMessage('Error opening GoJS display panel. Check console for details.');
+              }
               break;
             case 'initiateGoJsGeneration': // Message from gojsDiagramGenerator.html
               vscode.window.showInformationMessage('GoJS diagram generation initiated.');
@@ -188,6 +219,9 @@ function activate(context) {
                 context.subscriptions // Add listener to subscriptions for cleanup
               );
               break;
+            case 'openGojsDiagramInNewPanel': // Add this case
+              await handleOpenGojsDiagramInNewPanel(message, context, panel);
+              break;
             default:
               console.warn('Received unknown message command for GoJS generator:', message.command);
           }
@@ -201,6 +235,20 @@ function activate(context) {
   );
 
   context.subscriptions.push(showLinksDisposable, generateDiagramDisposable, generateGoJSDiagramDisposable);
+}
+
+// New helper function for common call hierarchy message handling
+async function handleCommonCallHierarchyMessages(message, panel, uri, position, context) {
+  switch (message.command) {
+    case 'getCallHierarchyItems':
+      await handleGetCallHierarchyItems(message, panel, uri, position, context);
+      return true;
+    case 'getRecursiveOutgoingCalls':
+      await handleGetRecursiveOutgoingCalls(message, panel, uri, position, context);
+      return true;
+    default:
+      return false; // Command not handled by this common handler
+  }
 }
 
 // Helper function for 'getCallHierarchyItems'
@@ -311,26 +359,6 @@ async function handleOpenFileInEditor(message, context) {
       message.payload.endLine || message.payload.startLine
     );
   }
-}
-
-/**
- * Creates HTML string for a link to open the file in VS Code.
- * @param {vscode.Uri} uri The URI of the file.
- * @param {vscode.ExtensionContext} context The extension context.
- * @returns {string} HTML string for an anchor tag.
- */
-function createFileLinksHtml(uri, context) {
-  const filename = path.basename(uri.fsPath);
-  let relativePath = uri.fsPath;
-
-  const workspaceFolders = vscode.workspace.workspaceFolders;
-  if (workspaceFolders && workspaceFolders.length > 0) {
-    const workspaceRoot = workspaceFolders[0].uri.fsPath;
-    relativePath = path.relative(workspaceRoot, uri.fsPath);
-  }
-
-  // Updated to the shorter link format
-  return `<a href="#" class="code-link" data-file="${relativePath}">${filename}</a>`;
 }
 
 /**
@@ -539,194 +567,6 @@ async function invokeClaudeLlmWithPrompt(promptText, panel) {
 }
 
 /**
- * Recursively builds the call hierarchy for an item, but only for local project files
- * @param {vscode.CallHierarchyItem} item The current item to process
- * @param {Set<string>} workspacePaths Set of workspace folder paths
- * @param {Set<string>} processedItems Set of already processed items to avoid cycles
- * @param {vscode.WebviewPanel | null} panel The webview panel to send progress updates to (can be null)
- * @param {vscode.ExtensionContext} context The extension context
- * @returns {Promise<object>} The hierarchy data for this item
- */
-async function buildHierarchyRecursively(item, workspacePaths, processedItems, panel, context) {
-  const itemId = `${item.uri.fsPath}:${item.range.start.line}:${item.range.start.character}`;
-
-  if (processedItems.has(itemId)) {
-    return {
-      name: item.name,
-      detail: item.detail,
-      location: {
-        startLine: item.range.start.line + 1,
-        endLine: item.range.end.line + 1,
-        file: item.uri.fsPath
-      },
-      link: createFileLinksHtml(item.uri, context), // Pass context
-      source: '',
-      classAnnotations: '',
-      reference: "Already processed - cycle detected"
-    };
-  }
-
-  processedItems.add(itemId);
-
-  const isLocal = isPathInWorkspace(item.uri.fsPath, workspacePaths);
-  const isExternal = !isLocal || isExternalPackage(item.detail);
-
-  // Only get source and class info for local, non-external package files
-  let source = '';
-  let classAnnotations = '';
-
-  if (!isExternal && isLocal) {
-    // Extract the class name from item.detail (format is typically "ClassName.methodName")
-		const className = item.detail?.split('.')?.pop() || '';
-
-
-    // Get class information including annotations
-    const classInfo = await getClassInformation(item.uri, className);
-    classAnnotations = classInfo.annotations;
-
-    // Get method source
-    const document = await vscode.workspace.openTextDocument(item.uri);
-    source = document.getText(new vscode.Range(
-      item.range.start.line, 0,
-      item.range.end.line, document.lineAt(item.range.end.line).text.length
-    ));
-  }
-
-  const methodData = {
-    name: item.name,
-    detail: item.detail,
-    location: {
-      startLine: item.range.start.line + 1,
-      endLine: item.range.end.line + 1,
-      file: item.uri.fsPath
-    },
-    link: createFileLinksHtml(item.uri, context), // Pass context
-    source,
-    classAnnotations,
-    outgoingCalls: []
-  };
-
-  if (isExternal) {
-    methodData.external = true;
-  }
-
-  const outgoing = /** @type {vscode.CallHierarchyOutgoingCall[]} */ (await vscode.commands.executeCommand(
-    'vscode.provideOutgoingCalls', item
-  ));
-
-  for (const call of outgoing) {
-    const isCallLocal = isPathInWorkspace(call.to.uri.fsPath, workspacePaths);
-    const isCallExternal = !isCallLocal || isExternalPackage(call.to.detail);
-
-    let callSource = '';
-    let callClassAnnotations = '';
-
-    if (!isCallExternal && isCallLocal) {
-      // Extract the class name from call.to.detail
-      const callClassName = call.to.detail?.split('.')?.pop() || '';
-
-      // Get class information including annotations
-      const classInfo = await getClassInformation(call.to.uri, callClassName);
-      callClassAnnotations = classInfo.annotations;
-
-      // Get method source
-      const document = await vscode.workspace.openTextDocument(call.to.uri);
-      callSource = document.getText(new vscode.Range(
-        call.to.range.start.line, 0,
-        call.to.range.end.line, document.lineAt(call.to.range.end.line).text.length
-      ));
-    }
-
-    const callData = {
-      name: call.to.name,
-      detail: call.to.detail,
-      location: {
-        startLine: call.to.range.start.line + 1,
-        endLine: call.to.range.end.line + 1,
-        file: call.to.uri.fsPath
-      },
-      link: createFileLinksHtml(call.to.uri, context), // Pass context
-      source: callSource,
-      classAnnotations: callClassAnnotations,
-      callSites: call.fromRanges.map(range => ({
-        startLine: range.start.line + 1,
-        endLine: range.end.line + 1
-      }))
-    };
-
-    if (isCallExternal) {
-      callData.external = true;
-    }
-
-    if (!isCallExternal) {
-      const nestedCalls = await buildHierarchyRecursively(call.to, workspacePaths, processedItems, panel, context);
-      if (nestedCalls.outgoingCalls) {
-        callData.outgoingCalls = nestedCalls.outgoingCalls;
-      }
-    }
-
-    methodData.outgoingCalls.push(callData);
-  }
-
-  return methodData;
-}
-
-/**
- * Determines if a file path is within one of the workspace folders
- * @param {string} filePath Path to check
- * @param {Set<string>} workspacePaths Set of workspace folder paths
- * @returns {boolean} True if the path is within a workspace folder
- */
-function isPathInWorkspace(filePath, workspacePaths) {
-  // Check if the file path starts with any of the workspace paths
-  for (const workspacePath of workspacePaths) {
-    if (filePath.startsWith(workspacePath)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-/**
- * Determines if a method belongs to an external package based on its detail
- * @param {string} detail The detail property of the CallHierarchyItem
- * @returns {boolean} True if the method appears to be from an external package
- */
-function isExternalPackage(detail) {
-  if (!detail) return false;
-
-  // Check for standard Java packages
-  if (detail.includes('java.') || detail.includes('javax.')) {
-    return true;
-  }
-
-  // Common external package patterns
-  const externalPackagePrefixes = [
-    'java.base/',  // Java modules
-    'org.springframework',
-    'com.google',
-    'org.apache',
-    'com.fasterxml',
-    'junit.',
-    'org.junit',
-    'org.mockito',
-    'com.sun.',
-    'sun.',
-    'jdk.',
-    'io.netty.',
-    'org.slf4j',
-    'org.yaml',
-    'org.json',
-    'com.intellij',
-    'kotlin.',
-    'scala.',
-    'groovy.'
-  ];
-
-  return externalPackagePrefixes.some(prefix => detail.includes(prefix));
-}
-
-/**
  * Generates a prompt for sequence diagram generation based on call hierarchy data
  * @param {object[]} hierarchyData The call hierarchy data
  * @param {vscode.WebviewPanel | null} panel The webview panel to send progress updates to. Can be null if no progress updates are needed.
@@ -925,81 +765,14 @@ function getMermaidDisplayWebviewContent(mermaidCode, promptText, context, webvi
  * @returns {string} The processed HTML content.
  */
 function getGoJsDisplayWebviewContent(context, webview) {
+  // Restored original implementation
   const templatePath = vscode.Uri.joinPath(context.extensionUri, 'media', 'gojsDisplay.html');
   const templateContent = fs.readFileSync(templatePath.fsPath, 'utf8');
   const cspSource = webview.cspSource;
 
   // Replace CSP source. GoJS data will be sent via postMessage.
-  return templateContent.replace(/\${cspSource}/g, cspSource);
-}
-
-/**
- * Gets class information including annotations using VS Code's symbol provider
- * @param {vscode.Uri} uri Document URI
- * @param {string} className Name of the class to find
- * @returns {Promise<{annotations: string, className: string, range: vscode.Range | null}>}
- */
-async function getClassInformation(uri, className) {
-	if (className === 'com') throw new Error('Invalid class name: com');
-
-  try {
-    const symbols = /** @type {vscode.DocumentSymbol[]} */ (await vscode.commands.executeCommand(
-      'vscode.executeDocumentSymbolProvider',
-      uri
-    ));
-
-    if (!symbols) return { annotations: '', className, range: null };
-
-    // Find the class symbol
-    const classSymbol = symbols.find(s =>
-      s.kind === vscode.SymbolKind.Class &&
-      s.name === className
-    );
-
-    if (!classSymbol) return { annotations: '', className, range: null };
-
-    const document = await vscode.workspace.openTextDocument(uri);
-
-    // Get the full range of possible annotation lines before the class
-    const possibleAnnotationRange = new vscode.Range(
-      Math.max(0, classSymbol.range.start.line - 20), // Look up to 20 lines before class
-      0,
-      classSymbol.range.start.line + 3, // Look 3 lines after class
-      document.lineAt(classSymbol.range.start.line).text.length
-    );
-
-    // Get all text in the possible annotation range
-    const textBeforeClass = document.getText(possibleAnnotationRange);
-
-    // Process the text to find annotations
-    const annotations = textBeforeClass
-      .split('\n')
-      .map(line => line.trim())
-      .filter(line => {
-        // Keep annotations and any metadata like access modifiers
-        if (line.startsWith('@')) return true;
-
-        // Stop at any non-annotation, non-modifier line
-        if (line !== '' &&
-            !line.startsWith('//') &&
-            !line.match(/^(public|private|protected|abstract|final|static)\s/)) {
-          return false;
-        }
-        return line.startsWith('public') ||
-               line.startsWith('private') ||
-               line.startsWith('protected');
-      })
-      .join('\n');
-
-    return {
-      annotations,
-      className: classSymbol.name,
-      range: classSymbol.range
-    };
-  } catch (error) {
-    console.error('Error getting class information:', error);
-    return { annotations: '', className, range: null };
-  }
+  // Note: Adjusted regex from \\${cspSource} to \${\cspSource\}
+  return templateContent.replace(/\${\cspSource}/g, cspSource);
 }
 
 // Helper function to generate a nonce (if you choose to use nonces for CSP)
@@ -1051,6 +824,116 @@ async function openFileAtLocation(context, relativeFilePath, startLine, endLine)
   }
 }
 
+// New handler function for 'openGojsDiagramInNewPanel'
+async function handleOpenGojsDiagramInNewPanel(message, context, originalPanel) {
+  try {
+    const diagramData = message.payload;
+    if (!diagramData || !diagramData.nodes || !diagramData.links) {
+      vscode.window.showErrorMessage('Cannot open diagram: Invalid data received.');
+      if (originalPanel && originalPanel.webview) {
+        originalPanel.webview.postMessage({ command: 'diagramOpenError', payload: 'Invalid data received from source webview.' });
+      }
+      return;
+    }
+
+    const displayPanel = vscode.window.createWebviewPanel(
+      'gojsDiagramView',         // Identifies the type of the webview. Used internally.
+      'GoJS Diagram View',       // Title of the panel displayed to the user.
+      vscode.ViewColumn.Beside,  // Show in a new column.
+      {
+        enableScripts: true,
+        retainContextWhenHidden: true,
+        localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, 'media')] // For future use if loading local scripts/styles
+      }
+    );
+
+    displayPanel.webview.html = getGoJsViewerWebviewContent(context, displayPanel.webview, diagramData);
+    context.subscriptions.push(displayPanel);
+
+    if (originalPanel && originalPanel.webview) {
+      originalPanel.webview.postMessage({ command: 'diagramOpenedInNewPanel', payload: 'Diagram panel created.' });
+    }
+    vscode.window.showInformationMessage('GoJS Diagram View panel opened.');
+
+  } catch (e) {
+    console.error('Error opening GoJS Diagram View panel:', e);
+    vscode.window.showErrorMessage('Error opening GoJS Diagram View panel. Check console for details.');
+    if (originalPanel && originalPanel.webview) {
+      originalPanel.webview.postMessage({ command: 'diagramOpenError', payload: `Error creating diagram panel: ${e.message}` });
+    }
+  }
+}
+
+// New helper function to generate HTML for the GoJS diagram viewer panel
+function getGoJsViewerWebviewContent(context, webview, diagramData) {
+  const gojsCdn = 'https://unpkg.com/gojs@2.3/release/go.js'; // Specify a version
+  const nonce = getNonce(); // Assuming getNonce() function exists
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; img-src ${webview.cspSource} data:; script-src 'nonce-${nonce}' ${webview.cspSource} https:;">
+    <title>GoJS Diagram View</title>
+    <script nonce="${nonce}" src="${gojsCdn}"></script>
+    <style>
+        body, html { margin: 0; padding: 0; height: 100%; overflow: hidden; }
+        #myDiagramDiv { width: 100%; height: 100%; border: none; }
+    </style>
+</head>
+<body>
+    <div id="myDiagramDiv"></div>
+    <script nonce="${nonce}">
+        if (typeof go !== 'undefined') {
+            initDiagram();
+        } else {
+            const goJsScriptTag = document.querySelector('script[src="${gojsCdn}"]');
+            if (goJsScriptTag) {
+                goJsScriptTag.onload = initDiagram;
+            } else {
+                document.body.innerText = "Error: GoJS library not found.";
+            }
+        }
+
+        function initDiagram() {
+            try {
+                const $ = go.GraphObject.make;
+                const diagram = $(go.Diagram, "myDiagramDiv", {
+                    initialContentAlignment: go.Spot.Center,
+                    "undoManager.isEnabled": true,
+                    layout: $(go.LayeredDigraphLayout)
+                });
+
+                const nodeDataArray = ${JSON.stringify(diagramData.nodes || [])};
+                const linkDataArray = ${JSON.stringify(diagramData.links || [])};
+                
+                diagram.nodeTemplate =
+                    $(go.Node, "Auto",
+                        $(go.Shape, "RoundedRectangle", { strokeWidth: 0, fill: "lightblue" }),
+                        $(go.TextBlock,
+                            { margin: 8, font: "bold 12px sans-serif" },
+                            new go.Binding("text", "name"))
+                    );
+
+                diagram.linkTemplate =
+                    $(go.Link,
+                        { routing: go.Link.AvoidsNodes, corner: 5 },
+                        $(go.Shape),
+                        $(go.Shape, { toArrow: "Standard" })
+                    );
+                
+                diagram.model = new go.GraphLinksModel(nodeDataArray, linkDataArray);
+            } catch (e) {
+                console.error("Error initializing GoJS diagram:", e);
+                document.getElementById("myDiagramDiv").innerText = "Error initializing GoJS diagram: " + e.message;
+            }
+        }
+    </script>
+</body>
+</html>`;
+}
+
 function deactivate() {}
 
 module.exports = {
@@ -1066,8 +949,5 @@ module.exports = {
   openFileAtLocation, // Exported for external use
   buildPromptFromSources, // Export new function
   generateMethodId, // Export new function
-  createFileLinksHtml,
-  isPathInWorkspace, // Exported this function
-  buildHierarchyRecursively, // Exported this function
-  isExternalPackage // Exported this function
+  getGoJsViewerWebviewContent // Export new function for GoJS viewer
 };

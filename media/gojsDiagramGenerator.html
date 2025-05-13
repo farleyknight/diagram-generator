@@ -81,7 +81,10 @@
     <textarea id="flattenedCallHierarchyData" style="height:200px;" readonly placeholder="Flattened call hierarchy (nodes and links) will be shown here."></textarea>
     <br><br>
 
-    <div id="myDiagramDiv"></div>
+    <button id="openDiagramButton" onclick="openGojsDiagramInNewPanel()">Open Diagram in New Panel</button>
+    <div id="loadingSpinnerOpenDiagram" class="spinner" style="display:none;"></div>
+    <br><br>
+
     <script>
         // Basic VS Code Webview API setup
         const vscode = acquireVsCodeApi();
@@ -110,6 +113,10 @@
             let id = 0;
 
             function recurse(obj, parentId = null) {
+                // If the object has no source, skip it and its children
+                if (!obj.source) {
+                    return;
+                }                
                 const thisId = id++;
                 nodes.push({
                     key: thisId,
@@ -181,6 +188,44 @@
             }
         }
 
+        function openGojsDiagramInNewPanel() {
+            const spinner = document.getElementById('loadingSpinnerOpenDiagram');
+            const progressStatusDiv = document.getElementById('progressStatus');
+            const flattenedDataTextarea = document.getElementById('flattenedCallHierarchyData');
+
+            if (!flattenedDataTextarea || !progressStatusDiv || !spinner) {
+                console.error('Required HTML elements not found for opening diagram.');
+                if (progressStatusDiv) progressStatusDiv.textContent = 'Error: UI elements missing for opening diagram.';
+                return;
+            }
+            
+            const jsonDataString = flattenedDataTextarea.value;
+            if (!jsonDataString.trim()) {
+                progressStatusDiv.textContent = 'No flattened data available to generate diagram.';
+                if (spinner) spinner.style.display = 'none';
+                return;
+            }
+
+            try {
+                const diagramData = JSON.parse(jsonDataString);
+                if (!diagramData || !diagramData.nodes || !diagramData.links) {
+                    progressStatusDiv.textContent = 'Flattened data is not in the expected format (missing nodes or links).';
+                    if (spinner) spinner.style.display = 'none';
+                    return;
+                }
+                spinner.style.display = 'inline-block';
+                progressStatusDiv.textContent = 'Requesting to open diagram in new panel...';
+                vscode.postMessage({
+                    command: 'openGojsDiagramInNewPanel',
+                    payload: diagramData
+                });
+            } catch (error) {
+                console.error("Error preparing data for new diagram panel:", error);
+                progressStatusDiv.textContent = 'Error preparing data: ' + error.message;
+                if (spinner) spinner.style.display = 'none';
+            }
+        }
+
         // Placeholder for GoJS initialization and diagram logic
         function init() {
             // In a real scenario, you would initialize GoJS here.
@@ -194,6 +239,13 @@
 
             // Send webviewReady only after DOM is fully ready, including new button
             vscode.postMessage({ command: 'webviewReady' });
+
+            const spinners = {
+                'callHierarchyItems': document.getElementById('loadingSpinner'),
+                'recursiveOutgoingCalls': document.getElementById('loadingSpinnerRecursive'),
+                'flattenedCallHierarchy': document.getElementById('loadingSpinnerFlattened'), // Spinner for the new operation
+                'openDiagram': document.getElementById('loadingSpinnerOpenDiagram')
+            };
         }
 
         document.addEventListener('DOMContentLoaded', () => {
@@ -211,7 +263,8 @@
             const spinners = {
                 'callHierarchyItems': document.getElementById('loadingSpinner'),
                 'recursiveOutgoingCalls': document.getElementById('loadingSpinnerRecursive'),
-                'flattenedCallHierarchy': document.getElementById('loadingSpinnerFlattened') // Spinner for the new operation
+                'flattenedCallHierarchy': document.getElementById('loadingSpinnerFlattened'), // Spinner for the new operation
+                'openDiagram': document.getElementById('loadingSpinnerOpenDiagram')
             };
 
             if (message.command === 'callHierarchyItemsData' || message.command === 'callHierarchyItemsError') {
@@ -219,6 +272,10 @@
             }
             if (message.command === 'recursiveOutgoingCallsData' || message.command === 'recursiveOutgoingCallsError') {
                 if(spinners.recursiveOutgoingCalls) spinners.recursiveOutgoingCalls.style.display = 'none';
+            }
+            // Hide open diagram spinner on response from extension (though specific message isn't defined yet for this)
+            if (message.command === 'diagramOpenedInNewPanel' || message.command === 'diagramOpenError') { // Assuming these message types
+                if(spinners.openDiagram) spinners.openDiagram.style.display = 'none';
             }
             // Conditions for mermaidDiagramPrompt, claudeDiagram, cleanupAndAddLinks spinners removed as they are not relevant here yet
 
@@ -250,6 +307,13 @@
                 // case 'loadDiagramData':
                 //     // load GoJS diagram data
                 //     break;
+                case 'diagramOpenedInNewPanel': // Example success message
+                    if (progressStatusDiv) progressStatusDiv.textContent = 'Diagram opened successfully in new panel.';
+                    // No direct UI update needed in this webview for this
+                    break;
+                case 'diagramOpenError': // Example error message
+                    if (progressStatusDiv) progressStatusDiv.textContent = 'Error opening diagram: ' + message.payload;
+                    break;
             }
         });
     </script>
