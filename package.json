@@ -1,6 +1,7 @@
 {
   "name": "diagram-generator",
   "displayName": "Diagram Generator",
+  "publisher": "farleyknight",
   "description": "Scan Java files and show links in a Webview",
   "version": "0.0.2",
   "engines": {
