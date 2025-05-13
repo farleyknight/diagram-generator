@@ -2,6 +2,7 @@ const vscode = require('vscode');
 const path = require('path');
 const parseGitConfig = require('parse-git-config').sync;
 const fs = require('fs');
+const { handleCleanupAndAddLinks, collectSources } = require('./diagramProcessor'); // Updated import to include collectSources
 
 /**
  * @param {vscode.ExtensionContext} context
@@ -114,7 +115,7 @@ function activate(context) {
               await handleOpenFileInEditor(message, context);
               break;
             case 'cleanupAndAddLinks':
-              await handleCleanupAndAddLinks(message, panel);
+              await handleCleanupAndAddLinks(message, panel, generateMethodId); // Pass generateMethodId
               break;
             default:
               console.warn('Received unknown message command:', message.command);
@@ -236,74 +237,6 @@ async function handleOpenFileInEditor(message, context) {
       message.payload.startLine,
       message.payload.endLine || message.payload.startLine
     );
-  }
-}
-
-// Helper function for 'cleanupAndAddLinks'
-async function handleCleanupAndAddLinks(message, panel) {
-  try {
-    const mermaidCode = message.payload.mermaidCode;
-    if (!mermaidCode || mermaidCode.trim() === '') {
-      panel.webview.postMessage({ command: 'cleanupAndAddLinksError', payload: 'Mermaid code is empty. Cannot process.' });
-      return;
-    }
-
-    // Convert \\n to <br>
-    let processedMermaidCode = mermaidCode.replace(/\\n/g, '<br>');
-
-    // Add quotes around strings in brackets if not already quoted
-    // Example: A[POST /api/products/{productId}/stock] -> A["POST /api/products/{productId}/stock"]
-    // Example: A["ALREADY QUOTED"] -> A["ALREADY QUOTED"] (no change)
-    processedMermaidCode = processedMermaidCode.replace(/\[(.*?)\]/g, (match, contentOriginal) => {
-      const content = contentOriginal.trim(); // Use trimmed version for logical checks
-
-      // Case 1a: Content is already a simple quoted string, e.g., "description"
-      if (content.startsWith('"') && content.endsWith('"')) {
-        return `[${contentOriginal}]`; // Preserve, using original content to keep original spacing
-      }
-      // Case 1b: Content is already a quoted string within parentheses, e.g., ("description")
-      if (content.startsWith('("') && content.endsWith('")')) {
-        return `[${contentOriginal}]`; // Preserve, using original content to keep original spacing
-      }
-
-      // Case 2: Content is already a bracketed structure, e.g., ["description"] or [subgraph ... end]
-      // This handles PC_updateStock[["..."]] becoming PC_updateStock[["..."]] (preserved)
-      // instead of PC_updateStock["["..."]"] (incorrectly re-processed).
-      if (content.startsWith('[') && content.endsWith(']')) {
-        return `[${contentOriginal}]`; // Preserve, using original content
-      }
-
-      // Case 3: Content is unquoted (e.g., description) or quoted in a way not caught above.
-      // Quote the trimmed content.
-      return `["${content}"]`;
-    });
-
-    // Add quotes around strings in pipes if not already quoted
-    // Example: |POST /api/products/{id}/stock| -> |"POST /api/products/{id}/stock"|
-    // Example: |"ALREADY QUOTED"| -> |"ALREADY QUOTED"| (no change)
-    processedMermaidCode = processedMermaidCode.replace(/\|(.*?)\|/g, (match, content) => {
-      if (content.startsWith('"') && content.endsWith('"')) {
-        return `|${content}|`; // Already quoted
-      }
-      // Handle cases like |"content" and "content"| by stripping existing quotes if they are unbalanced or partial
-      const trimmedContent = content.replace(/^"+|"+$/g, '');
-      return `|"${trimmedContent}"|`; // Add quotes
-    });
-
-    // Remove trailing whitespace from each line
-		// NOTE You must split the string using '\n' not '<br>' to remove trailing whitespace
-    processedMermaidCode = processedMermaidCode.split('\n').map(line => line.trimEnd()).join('\n');
-
-    // In a future step, this processedMermaidCode would be sent to an LLM
-    // for further cleaning and link addition. For now, we'll send
-    // the result of the newline conversion back to the webview.
-    panel.webview.postMessage({ command: 'cleanupAndAddLinksData', payload: processedMermaidCode });
-    panel.webview.postMessage({ command: 'updateProgressStatus', payload: 'Diagram newlines converted to <br> and bracketed/piped strings quoted. Ready for further LLM processing.' });
-
-  } catch (e) {
-    console.error('Error in cleanupAndAddLinks:', e);
-    vscode.window.showErrorMessage('Error processing Mermaid diagram for cleanup.');
-    panel.webview.postMessage({ command: 'cleanupAndAddLinksError', payload: `Error processing diagram: ${e.message}` });
   }
 }
 
@@ -718,29 +651,6 @@ function isExternalPackage(detail) {
   ];
 
   return externalPackagePrefixes.some(prefix => detail.includes(prefix));
-}
-
-/**
- * Recursively collects all non-empty sources, filenames, class names and annotations from hierarchy data
- * @param {object} data The hierarchy data object
- * @param {Array<{source: string, filename: string, className: string, methodNameSignature: string, classAnnotations: string}>} sources Array to collect data into
- */
-function collectSources(data, sources) {
-  if (data.source && typeof data.source === 'string' && data.source.trim()) {
-    sources.push({
-      source: data.source.trim(),
-      filename: data.location.file,
-      className: data.detail || 'Unknown Class', // This is classNameDetail for generateMethodId
-      methodNameSignature: data.name || 'unknownMethod', // This is methodNameSignature for generateMethodId
-      classAnnotations: data.classAnnotations || ''
-    });
-  }
-
-  if (data.outgoingCalls && Array.isArray(data.outgoingCalls)) {
-    for (const call of data.outgoingCalls) {
-      collectSources(call, sources);
-    }
-  }
 }
 
 /**
