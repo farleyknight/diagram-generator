@@ -3,6 +3,7 @@ const path = require('path');
 const parseGitConfig = require('parse-git-config').sync;
 const fs = require('fs');
 const { handleCleanupAndAddLinks, collectSources } = require('./diagramProcessor'); // Updated import to include collectSources
+const { createWebviewPanel } = require('./webviewUtils'); // Added import
 
 /**
  * @param {vscode.ExtensionContext} context
@@ -56,7 +57,7 @@ function activate(context) {
   );
 
   const generateDiagramDisposable = vscode.commands.registerCommand(
-    'diagram-generator.generateDiagram',
+    'diagram-generator.generateMermaidDiagram',
     async () => {
       const editor = vscode.window.activeTextEditor;
       if (!editor) {
@@ -71,22 +72,17 @@ function activate(context) {
       const uri = editor.document.uri;
       const position = editor.selection.active;
 
-      // Create and show a webview panel
-      const panel = vscode.window.createWebviewPanel(
+      // Create and show a webview panel using the utility function
+      const panel = createWebviewPanel(
+        context,
         'generateDiagram', // Identifies the type of the webview. Used internally
         'Generate Mermaid Diagram', // Title of the panel displayed to the user
-        vscode.ViewColumn.One, // Editor column to show the new webview panel in.
-        {
-          // Enable scripts in the webview
-          enableScripts: true,
-          retainContextWhenHidden: true, // Retain context when webview is hidden
-          localResourceRoots: [vscode.Uri.file(path.join(context.extensionPath, 'media'))]
-        }
+        'mermaidDiagramGenerator.html' // HTML file to load
       );
 
-      // Set the HTML content
-      const webviewContentPath = vscode.Uri.file(path.join(context.extensionPath, 'media', 'diagramGeneratorWebview.html'));
-      panel.webview.html = fs.readFileSync(webviewContentPath.fsPath, 'utf8');
+      // Set the HTML content - this is now handled by createWebviewPanel
+      // const webviewContentPath = vscode.Uri.file(path.join(context.extensionPath, 'media', 'mermaidDiagramGenerator.html'));
+      // panel.webview.html = fs.readFileSync(webviewContentPath.fsPath, 'utf8');
 
       // Handle messages from the webview
       panel.webview.onDidReceiveMessage(
@@ -127,7 +123,81 @@ function activate(context) {
     }
   );
 
-  context.subscriptions.push(showLinksDisposable, generateDiagramDisposable);
+  const generateGoJSDiagramDisposable = vscode.commands.registerCommand(
+    'diagram-generator.generateGoJSDiagram',
+    async () => {
+      // For now, let's assume we might want a different HTML or setup for GoJS
+      // Or it could reuse the same initial webview if the UI supports both.
+      // This is a minimal placeholder.
+      const panel = createWebviewPanel(
+        context,
+        'generateGoJSDiagram',
+        'Generate GoJS Diagram',
+        'gojsDiagramGenerator.html' // Assuming a new HTML file for GoJS, or adapt as needed
+      );
+
+      // Placeholder for GoJS specific message handling
+      panel.webview.onDidReceiveMessage(
+        async message => {
+          switch (message.command) {
+            case 'initiateGoJsGeneration': // Message from gojsDiagramGenerator.html
+              vscode.window.showInformationMessage('GoJS diagram generation initiated.');
+              // 1. Simulate or perform actual GoJS data generation
+              const sampleGoJsData = {
+                nodeDataArray: [
+                  { key: "Alpha", name: "Start Node" },
+                  { key: "Beta", name: "Another Node" },
+                  { key: "Gamma", name: "End Node" }
+                ],
+                linkDataArray: [
+                  { from: "Alpha", to: "Beta" },
+                  { from: "Beta", to: "Gamma" }
+                ]
+              };
+
+              // 2. Create and show the GoJS display panel
+              const displayPanel = vscode.window.createWebviewPanel(
+                'goJsDisplay', // Identifies the type of the webview.
+                'GoJS Diagram Display', // Title of the panel.
+                vscode.ViewColumn.Beside, // Show in a new column.
+                {
+                  enableScripts: true,
+                  localResourceRoots: [vscode.Uri.file(path.join(context.extensionPath, 'media'))]
+                }
+              );
+
+              displayPanel.webview.html = getGoJsDisplayWebviewContent(context, displayPanel.webview);
+              context.subscriptions.push(displayPanel); // Ensure the panel is disposed when the extension deactivates
+
+              // 3. Post data to the GoJS display webview once it's ready
+              const gojsDisplayReadyListener = displayPanel.webview.onDidReceiveMessage(
+                displayMessage => {
+                  if (displayMessage.command === 'gojsDisplayReady') {
+                    displayPanel.webview.postMessage({
+                      command: 'loadGoJsData',
+                      payload: { goJsData: sampleGoJsData }
+                    });
+                    // Dispose this listener once the message is sent and processed
+                    gojsDisplayReadyListener.dispose();
+                  }
+                },
+                undefined,
+                context.subscriptions // Add listener to subscriptions for cleanup
+              );
+              break;
+            default:
+              console.warn('Received unknown message command for GoJS generator:', message.command);
+          }
+        },
+        undefined,
+        context.subscriptions
+      );
+
+      vscode.window.showInformationMessage('GoJS Diagram generator panel shown (placeholder).');
+    }
+  );
+
+  context.subscriptions.push(showLinksDisposable, generateDiagramDisposable, generateGoJSDiagramDisposable);
 }
 
 // Helper function for 'getCallHierarchyItems'
@@ -834,7 +904,7 @@ function getWebviewContent(body) {
  * @returns {string} The processed HTML content.
  */
 function getMermaidDisplayWebviewContent(mermaidCode, promptText, context, webview) {
-  const templatePath = vscode.Uri.joinPath(context.extensionUri, 'media', 'mermaidDisplayWebview.html');
+  const templatePath = vscode.Uri.joinPath(context.extensionUri, 'media', 'mermaidDisplay.html');
   const templateContent = fs.readFileSync(templatePath.fsPath, 'utf8');
   const nonce = getNonce(); // Helper function to generate nonce for CSP if needed, or manage CSP directly
   const cspSource = webview.cspSource;
@@ -843,6 +913,21 @@ function getMermaidDisplayWebviewContent(mermaidCode, promptText, context, webvi
     .replace(/\${mermaidCode}/g, mermaidCode)
     .replace(/\${promptText}/g, promptText || 'No prompt available')
     .replace(/\${cspSource}/g, cspSource);
+}
+
+/**
+ * Loads and processes the webview HTML template for displaying the GoJS diagram.
+ * @param {vscode.ExtensionContext} context The extension context.
+ * @param {vscode.Webview} webview The webview instance to get the CSP source from.
+ * @returns {string} The processed HTML content.
+ */
+function getGoJsDisplayWebviewContent(context, webview) {
+  const templatePath = vscode.Uri.joinPath(context.extensionUri, 'media', 'gojsDisplay.html');
+  const templateContent = fs.readFileSync(templatePath.fsPath, 'utf8');
+  const cspSource = webview.cspSource;
+
+  // Replace CSP source. GoJS data will be sent via postMessage.
+  return templateContent.replace(/\${cspSource}/g, cspSource);
 }
 
 /**
@@ -987,6 +1072,7 @@ module.exports = {
   invokeClaudeLlmWithPrompt, // New function for direct LLM call with prompt
   generateSequenceDiagramPrompt,
   getMermaidDisplayWebviewContent, // Export new function
+  getGoJsDisplayWebviewContent, // Export new function for GoJS display
   openFileAtLocation, // Exported for external use
   buildPromptFromSources, // Export new function
   generateMethodId // Export new function

@@ -14,17 +14,26 @@
         "title": "Diagram Generator: Show Java File Links"
       },
       {
-        "command": "diagram-generator.generateDiagram",
+        "command": "diagram-generator.generateMermaidDiagram",
         "title": "Diagram Generator: Generate Mermaid Diagram"
+      },
+      {
+        "command": "diagram-generator.generateGoJSDiagram",
+        "title": "Diagram Generator: Generate GoJS Diagram"
       }
     ],
     "menus": {
       "editor/context": [
         {
           "when": "resourceLangId == java",
-          "command": "diagram-generator.generateDiagram",
+          "command": "diagram-generator.generateMermaidDiagram",
           "group": "navigation"
-        }
+        },
+        {
+          "when": "resourceLangId == java",
+          "command": "diagram-generator.generateGoJSDiagram",
+          "group": "navigation"
+        }        
       ]
     }
   },

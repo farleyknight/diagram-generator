@@ -4,7 +4,7 @@ This is the README for your extension "diagram-generator". It helps visualize Ja
 
 ## Features
 
-### Generate Mermaid Diagram (`diagram-generator.generateDiagram`)
+### Generate Mermaid Diagram (`diagram-generator.generateMermaidDiagram`)
 
 This is the primary command of the extension. When a Java file is active in the editor, right-click and select "Diagram Generator: Generate Mermaid Diagram" from the context menu, or find it in the command palette. This opens a webview panel titled "Generate Mermaid Diagram" with the following functionalities:
 

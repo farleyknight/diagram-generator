@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <!-- TODO: Update CSP for GoJS if loaded from CDN or specific sources -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src ${cspSource} 'unsafe-inline' https://unpkg.com/gojs; style-src ${cspSource} 'unsafe-inline'; img-src ${cspSource} data:;">
+    <!-- Placeholder for GoJS library - typically included locally or from a CDN -->
+    <script src="https://unpkg.com/gojs"></script> 
+    <style>
+        html, body {
+            height: 100%;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden; /* Prevent scrollbars on body */
+            font-family: sans-serif;
+        }
+        .controls-bar {
+            display: flex;
+            gap: 8px;
+            padding: 10px;
+            background-color: #f0f0f0;
+            border-bottom: 1px solid #ccc;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        .controls-bar button {
+            padding: 6px 10px;
+            font-family: system-ui;
+            font-size: 13px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            cursor: pointer;
+            background-color: #fff;
+        }
+        .controls-bar button:hover {
+            background-color: #e0e0e0;
+        }
+        #myDiagramDiv {
+            flex-grow: 1; /* Takes up remaining space */
+            border: 1px solid #ccc;
+            margin: 10px;
+            min-height: 0; /* Important for flex children */
+        }
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            overflow: auto;
+            background-color: rgba(0,0,0,0.5);
+        }
+        .modal-content {
+            background-color: #fefefe;
+            margin: 10% auto;
+            padding: 20px;
+            border: 1px solid #888;
+            width: 80%;
+            max-width: 700px;
+            border-radius: 8px;
+            position: relative;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+        }
+        .modal-content h2 {
+            margin-top: 0;
+            font-family: system-ui;
+            font-size: 18px;
+            color: #333;
+        }
+        .modal-content pre, .modal-content textarea {
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            background-color: #f8f8f8;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            max-height: 60vh;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 13px;
+            color: #333;
+            width: calc(100% - 22px); /* Account for padding and border */
+        }
+        .close-btn {
+            color: #aaa;
+            font-size: 28px;
+            font-weight: bold;
+            position: absolute;
+            top: 10px;
+            right: 15px;
+            line-height: 1;
+        }
+        .close-btn:hover,
+        .close-btn:focus {
+            color: black;
+            text-decoration: none;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+    <div class="controls-bar">
+        <button id="showDataButton">Show Diagram Data</button>
+        <button id="exportSvgButton">Export SVG</button>
+        <!-- Add other GoJS specific controls here -->
+    </div>
+
+    <div id="myDiagramDiv"></div>
+
+    <div id="dataModal" class="modal">
+        <div class="modal-content">
+            <span class="close-btn" onclick="document.getElementById('dataModal').style.display='none'">&times;</span>
+            <h2>GoJS Diagram Data (JSON)</h2>
+            <textarea id="diagramDataTextarea" rows="15" readonly></textarea>
+        </div>
+    </div>
+
+    <script>
+        const vscode = acquireVsCodeApi();
+        let myDiagram = null;
+
+        // Initialize GoJS Diagram
+        function initDiagram() {
+            const $ = go.GraphObject.make; // Short hand for go.GraphObject.make
+
+            myDiagram = $(go.Diagram, "myDiagramDiv", {
+                initialContentAlignment: go.Spot.Center, // Center Diagram contents
+                "undoManager.isEnabled": true, // Enable undo & redo
+                layout: $(go.TreeLayout, { angle: 90, layerSpacing: 35 }) // Default layout
+            });
+
+            // Define a simple node template
+            myDiagram.nodeTemplate =
+                $(go.Node, "Auto",
+                    $(go.Shape, "RoundedRectangle", { strokeWidth: 0, fill: "lightblue" }),
+                    $(go.TextBlock, { margin: 8, font: "bold 14px sans-serif", stroke: '#333' },
+                        new go.Binding("text", "name"))
+                );
+
+            // Define a simple link template
+            myDiagram.linkTemplate =
+                $(go.Link,
+                    { routing: go.Link.AvoidsNodes, corner: 5 },
+                    $(go.Shape, { strokeWidth: 2, stroke: "#555" }),
+                    $(go.Shape, { toArrow: "Standard", stroke: null, fill: "#555"})
+                );
+            
+            // Placeholder: Load with sample data or wait for message
+            // loadDiagramData({
+            //     nodeDataArray: [ { key: "Alpha", name: "Alpha" }, { key: "Beta", name: "Beta" } ],
+            //     linkDataArray: [ { from: "Alpha", to: "Beta" } ]
+            // });
+
+            console.log("GoJS Diagram initialized.");
+            vscode.postMessage({ command: 'gojsDisplayReady' });
+        }
+
+        function loadDiagramData(data) {
+            if (!myDiagram) {
+                console.error("GoJS diagram not initialized yet.");
+                return;
+            }
+            if (typeof data === 'string') {
+                try {
+                    data = JSON.parse(data);
+                } catch (e) {
+                    console.error("Error parsing GoJS data string:", e);
+                    document.getElementById('myDiagramDiv').textContent = 'Error: Invalid GoJS data format.';
+                    return;
+                }
+            }
+            
+            if (data && data.nodeDataArray) {
+                myDiagram.model = new go.GraphLinksModel(data.nodeDataArray, data.linkDataArray);
+                document.getElementById('diagramDataTextarea').value = JSON.stringify(data, null, 2);
+            } else {
+                console.error("Received invalid or empty data for GoJS diagram:", data);
+                document.getElementById('myDiagramDiv').textContent = 'Error: No data provided for GoJS diagram.';
+            }
+        }
+        
+        function exportSVG() {
+            if (!myDiagram) return;
+            const svg = myDiagram.makeSvg({ scale: 1, background: "white" });
+            const svgString = new XMLSerializer().serializeToString(svg);
+            
+            // Create a blob and download link
+            const blob = new Blob([svgString], { type: "image/svg+xml" });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = "gojs_diagram.svg";
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            vscode.postMessage({ command: 'svgExported', payload: 'GoJS SVG export initiated.'});
+        }
+
+        document.getElementById('showDataButton').addEventListener('click', () => {
+            document.getElementById('dataModal').style.display = 'block';
+        });
+        
+        document.getElementById('exportSvgButton').addEventListener('click', exportSVG);
+
+        window.addEventListener('message', event => {
+            const message = event.data;
+            console.log("GoJS Display received message: ", message.command);
+            switch (message.command) {
+                case 'loadGoJsData':
+                    loadDiagramData(message.payload.goJsData);
+                    break;
+                // Add other message handlers as needed
+            }
+        });
+
+        // Initialize the diagram when the script loads
+        // Ensure GoJS library is loaded before calling initDiagram
+        if (window.go) {
+            initDiagram();
+        } else {
+            console.error("GoJS library not found. Diagram cannot be initialized.");
+            document.getElementById('myDiagramDiv').textContent = 'Error: GoJS library not loaded.';
+        }
+    </script>
+</body>
+</html> 
