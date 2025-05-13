@@ -7,6 +7,11 @@
     "vscode": "1.99.3"
   },
   "main": "extension.js",
+  "scripts": {
+    "release:patch": "git fetch --tags && npm version patch && git push --follow-tags",
+    "release:minor": "git fetch --tags && npm version minor && git push --follow-tags",
+    "release:major": "git fetch --tags && npm version major && git push --follow-tags"
+  },
   "contributes": {
     "commands": [
       {
