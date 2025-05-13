@@ -38,6 +38,5 @@
     }
   },
   "dependencies": {
-    "parse-git-config": "^3.0.0"
   }
 }

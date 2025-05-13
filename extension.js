@@ -1,6 +1,5 @@
 const vscode = require('vscode');
 const path = require('path');
-const parseGitConfig = require('parse-git-config').sync;
 const fs = require('fs');
 const { handleCleanupAndAddLinks, collectSources } = require('./diagramProcessor'); // Updated import to include collectSources
 const { createWebviewPanel } = require('./webviewUtils'); // Added import
@@ -28,21 +27,6 @@ function activate(context) {
       const uris = await vscode.workspace.findFiles(
         '**/*.java',
       );                                                                   
-
-      // Parse .git/config for remote.origin.url
-      // repoUrl and branch might be used elsewhere or for future features,
-      // so their calculation is kept, but they are not used by the simplified createFileLinksHtml.
-      let repoUrl = '';
-      try {
-        const cfg = parseGitConfig();                                   
-        const raw = cfg.remote?.origin?.url;
-        if (raw) {
-          repoUrl = toHTTPS(raw);                                       
-        }
-      } catch (err) {
-        console.error('Git parse error:', err);
-      }
-      const branch = 'main'; // adjust or derive dynamically if needed
 
       // Build HTML list of links
       let list = '<ul>';
@@ -126,6 +110,19 @@ function activate(context) {
   const generateGoJSDiagramDisposable = vscode.commands.registerCommand(
     'diagram-generator.generateGoJSDiagram',
     async () => {
+      const editor = vscode.window.activeTextEditor;
+      if (!editor) {
+        vscode.window.showErrorMessage('No active editor found. Please open a Java file.');
+        return;
+      }
+      if (editor.document.languageId !== 'java') {
+        vscode.window.showErrorMessage('This command can only be run on Java files.');
+        return;
+      }
+
+      const uri = editor.document.uri;
+      const position = editor.selection.active;
+
       // For now, let's assume we might want a different HTML or setup for GoJS
       // Or it could reuse the same initial webview if the UI supports both.
       // This is a minimal placeholder.
@@ -140,6 +137,12 @@ function activate(context) {
       panel.webview.onDidReceiveMessage(
         async message => {
           switch (message.command) {
+            case 'getCallHierarchyItems':
+              await handleGetCallHierarchyItems(message, panel, uri, position, context);
+              break;
+            case 'getRecursiveOutgoingCalls':
+              await handleGetRecursiveOutgoingCalls(message, panel, uri, position, context);
+              break;
             case 'initiateGoJsGeneration': // Message from gojsDiagramGenerator.html
               vscode.window.showInformationMessage('GoJS diagram generation initiated.');
               // 1. Simulate or perform actual GoJS data generation
@@ -931,19 +934,6 @@ function getGoJsDisplayWebviewContent(context, webview) {
 }
 
 /**
- * Convert SSH or Git URLs to HTTPS
- * @param {string} url
- */
-function toHTTPS(url) {
-  if (url.startsWith('git@')) {
-    const [, hostPath] = url.split('@');
-    const [host, repo] = hostPath.split(':');
-    return `https://${host}/${repo.replace(/\.git$/, '')}`;
-  }
-  return url.replace(/\.git$/, '');
-}
-
-/**
  * Gets class information including annotations using VS Code's symbol provider
  * @param {vscode.Uri} uri Document URI
  * @param {string} className Name of the class to find
@@ -1075,5 +1065,9 @@ module.exports = {
   getGoJsDisplayWebviewContent, // Export new function for GoJS display
   openFileAtLocation, // Exported for external use
   buildPromptFromSources, // Export new function
-  generateMethodId // Export new function
+  generateMethodId, // Export new function
+  createFileLinksHtml,
+  isPathInWorkspace, // Exported this function
+  buildHierarchyRecursively, // Exported this function
+  isExternalPackage // Exported this function
 };
