@@ -2,7 +2,7 @@
   "name": "diagram-generator",
   "displayName": "Diagram Generator",
   "description": "Scan Java files and show links in a Webview",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "engines": {
     "vscode": "1.99.3"
   },
@@ -38,10 +38,9 @@
           "when": "resourceLangId == java",
           "command": "diagram-generator.generateGoJSDiagram",
           "group": "navigation"
-        }        
+        }
       ]
     }
   },
-  "dependencies": {
-  }
+  "dependencies": {}
 }
