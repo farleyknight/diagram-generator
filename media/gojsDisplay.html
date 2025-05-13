@@ -24,6 +24,7 @@
             border-bottom: 1px solid #ccc;
             align-items: center;
             flex-wrap: wrap;
+            flex-shrink: 0; /* Prevent controls-bar from shrinking */
         }
         .controls-bar button {
             padding: 6px 10px;
@@ -37,12 +38,80 @@
         .controls-bar button:hover {
             background-color: #e0e0e0;
         }
-        #myDiagramDiv {
-            flex-grow: 1; /* Takes up remaining space */
-            border: 1px solid #ccc;
-            margin: 10px;
-            min-height: 0; /* Important for flex children */
+
+        /* New styles for resizable layout */
+        #diagramContainer {
+            display: flex;
+            flex-grow: 1; /* Takes up remaining space after controls-bar */
+            width: 100%;
+            height: calc(100% - 50px); /* Adjust based on controls-bar height if fixed */
+            position: relative; /* For child positioning if needed */
+            overflow: hidden; /* Prevent scrollbars on container if children overflow */
+            padding: 10px; /* Add some padding around the diagram and info area */
+            box-sizing: border-box;
         }
+
+        #myDiagramDiv {
+            /* flex-basis is controlled by JS, but provide a default */
+            flex-basis: 75%;
+            /* flex-grow: 1; Removed, flex-basis will handle it */
+            /* flex-shrink: 0; Allow shrinking */
+            height: 100%; /* Fill the height of diagramContainer */
+            border: 1px solid #ccc;
+            /* margin: 10px; Handled by diagramContainer padding */
+            min-height: 0; /* Important for flex children */
+            box-sizing: border-box;
+            min-width: 100px; /* Minimum width for the diagram panel */
+        }
+        #resizer {
+            flex-basis: 10px;
+            flex-shrink: 0;
+            height: 100%; /* Fill the height of diagramContainer */
+            background-color: #f0f0f0;
+            cursor: col-resize;
+            border-left: 1px solid #cccccc;
+            border-right: 1px solid #cccccc;
+            box-sizing: border-box;
+            margin: 0 5px; /* Add a small margin around the resizer */
+        }
+        #infoDiv {
+             /* flex-basis is implicitly determined by diagramDiv and resizer, provide a default */
+            flex-basis: 25%;
+            flex-grow: 1; /* Allow infoDiv to take remaining space */
+            height: 100%; /* Fill the height of diagramContainer */
+            padding: 10px;
+            box-sizing: border-box;
+            overflow-y: auto;
+            border: 1px solid #ccc;
+            background-color: #f9f9f9;
+            min-width: 100px; /* Minimum width for the info panel */
+        }
+        #infoDiv h3 {
+            margin-top: 0;
+            font-size: 1.1em;
+            color: #333;
+            border-bottom: 1px solid #eee;
+            padding-bottom: 5px;
+        }
+        #infoDiv div, #infoDiv pre {
+            margin-bottom: 8px;
+            font-size: 0.9em;
+        }
+        #infoDiv strong {
+            display: block;
+            margin-bottom: 3px;
+            color: #555;
+        }
+        #infoDiv pre {
+            background: #fff;
+            padding: 8px;
+            border-radius: 3px;
+            border: 1px solid #ddd;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+        /* End of new styles */
+
         .modal {
             display: none;
             position: fixed;
@@ -109,7 +178,19 @@
         <!-- Add other GoJS specific controls here -->
     </div>
 
-    <div id="myDiagramDiv"></div>
+    <!-- New container for resizable layout -->
+    <div id="diagramContainer">
+        <div id="myDiagramDiv"></div>
+        <div id="resizer"></div>
+        <div id="infoDiv">
+            <h3>Node Details</h3>
+            <div><strong>Name:</strong> <span id="nodeNameDisplay"><em>Click a node...</em></span></div>
+            <div><strong>Detail:</strong> <span id="nodeDetailDisplay"></span></div>
+            <div><strong>File:</strong> <span id="nodeFileDisplay"></span></div>
+            <div><strong>Source:</strong> <pre id="nodeSourceDisplay"></pre></div>
+        </div>
+    </div>
+    <!-- End of new container -->
 
     <div id="dataModal" class="modal">
         <div class="modal-content">
@@ -123,6 +204,24 @@
         const vscode = acquireVsCodeApi();
         let myDiagram = null;
 
+        // Variables for resizer logic
+        let isResizingPanels = false;
+        let panelsInitialPosX = 0;
+        let panelsInitialDiagramWidth = 0;
+        let diagramPanel = null; // Will be myDiagramDiv
+        let resizerElement = null;
+        let infoPanel = null;
+        let containerElement = null; // Will be diagramContainer
+
+        // Click handler to show node information
+        function showNodeInfo(e, obj) {
+            const data = obj.part.data;
+            document.getElementById("nodeNameDisplay").textContent = data.name || "N/A";
+            document.getElementById("nodeDetailDisplay").textContent = data.detail || "N/A";
+            document.getElementById("nodeFileDisplay").textContent = data.file || "N/A";
+            document.getElementById("nodeSourceDisplay").textContent = data.source || "N/A";
+        }
+
         // Initialize GoJS Diagram
         function initDiagram() {
             const $ = go.GraphObject.make; // Short hand for go.GraphObject.make
@@ -130,17 +229,24 @@
             myDiagram = $(go.Diagram, "myDiagramDiv", {
                 initialContentAlignment: go.Spot.Center, // Center Diagram contents
                 "undoManager.isEnabled": true, // Enable undo & redo
-                layout: $(go.TreeLayout, { angle: 90, layerSpacing: 35 }) // Default layout
+                layout: $(go.TreeLayout, { angle: 90, layerSpacing: 45, nodeSpacing: 20 }) // Adjusted layout
             });
 
-            // Define a simple node template
+            // Updated node template (from PoC, adapted)
             myDiagram.nodeTemplate =
                 $(go.Node, "Auto",
-                    $(go.Shape, "RoundedRectangle", { strokeWidth: 0, fill: "lightblue" }),
-                    $(go.TextBlock, { margin: 8, font: "bold 14px sans-serif", stroke: '#333' },
-                        new go.Binding("text", "name"))
+                    { click: showNodeInfo }, // Show node info on click
+                    $(go.Shape, "RoundedRectangle", { fill: "#ACE1AF", strokeWidth: 1, stroke: "#777" }), // Light green, with border
+                    $(go.Panel, "Table", { padding: 5 },
+                        $(go.TextBlock,
+                            { row: 0, column: 0, margin: new go.Margin(0, 2, 2, 2), font: "bold 12px sans-serif", stroke: "#333", alignment: go.Spot.Left },
+                            new go.Binding("text", "name")),
+                        $(go.TextBlock,
+                            { row: 1, column: 0, margin: new go.Margin(0, 2, 0, 2), font: "10px sans-serif", stroke: "#555", alignment: go.Spot.Left, maxSize: new go.Size(200, NaN) }, // Constrain width of detail
+                            new go.Binding("text", "detail"))
+                    )
                 );
-
+            
             // Define a simple link template
             myDiagram.linkTemplate =
                 $(go.Link,
@@ -160,26 +266,33 @@
         }
 
         function loadDiagramData(data) {
+            console.log("GoJS Display: loadDiagramData function called. Received data:", JSON.stringify(data)); // Log input to function
             if (!myDiagram) {
-                console.error("GoJS diagram not initialized yet.");
+                console.error("GoJS Display: GoJS diagram not initialized yet.");
+                document.getElementById('myDiagramDiv').textContent = 'Error: GoJS diagram not initialized when loadDiagramData called.';
                 return;
             }
+            
+            let parsedData = data;
             if (typeof data === 'string') {
+                console.log("GoJS Display: loadDiagramData received a string, attempting to parse.");
                 try {
-                    data = JSON.parse(data);
+                    parsedData = JSON.parse(data);
+                    console.log("GoJS Display: Successfully parsed string data.", JSON.stringify(parsedData));
                 } catch (e) {
-                    console.error("Error parsing GoJS data string:", e);
-                    document.getElementById('myDiagramDiv').textContent = 'Error: Invalid GoJS data format.';
+                    console.error("GoJS Display: Error parsing GoJS data string:", e, "String was:", data);
+                    document.getElementById('myDiagramDiv').textContent = 'Error: Invalid GoJS data string format. Check console.';
                     return;
                 }
             }
             
-            if (data && data.nodeDataArray) {
-                myDiagram.model = new go.GraphLinksModel(data.nodeDataArray, data.linkDataArray);
-                document.getElementById('diagramDataTextarea').value = JSON.stringify(data, null, 2);
+            if (parsedData && parsedData.nodeDataArray && parsedData.linkDataArray) {
+                console.log("GoJS Display: Valid data structure found (nodeDataArray and linkDataArray present). Loading model.");
+                myDiagram.model = new go.GraphLinksModel(parsedData.nodeDataArray, parsedData.linkDataArray);
+                document.getElementById('diagramDataTextarea').value = JSON.stringify(parsedData, null, 2);
             } else {
-                console.error("Received invalid or empty data for GoJS diagram:", data);
-                document.getElementById('myDiagramDiv').textContent = 'Error: No data provided for GoJS diagram.';
+                console.error("GoJS Display: Received invalid or empty data structure for GoJS diagram. Expected { nodeDataArray: [...], linkDataArray: [...] } but got:", JSON.stringify(parsedData));
+                document.getElementById('myDiagramDiv').textContent = 'Error: Invalid or missing data for GoJS diagram. Check console.';
             }
         }
         
@@ -201,6 +314,63 @@
             vscode.postMessage({ command: 'svgExported', payload: 'GoJS SVG export initiated.'});
         }
 
+        // Resizer JavaScript functions
+        function handlePanelsMouseMove(e) {
+            if (!isResizingPanels) return;
+
+            const deltaX = e.clientX - panelsInitialPosX;
+            let newDiagramWidthPx = panelsInitialDiagramWidth + deltaX;
+
+            const totalContainerWidthPx = containerElement.offsetWidth;
+            const resizerWidthPx = resizerElement.offsetWidth;
+            const minPanelWidthPx = 100; // Minimum width for panels
+
+            // Constrain the new diagram width
+            const maxDiagramWidthPx = totalContainerWidthPx - resizerWidthPx - minPanelWidthPx - (2 * 5) - (2 * 10); // 2*margin for resizer, 2*padding for container
+
+            newDiagramWidthPx = Math.max(minPanelWidthPx, newDiagramWidthPx);
+            newDiagramWidthPx = Math.min(newDiagramWidthPx, maxDiagramWidthPx);
+            
+            diagramPanel.style.flexBasis = newDiagramWidthPx + 'px';
+            // infoPanel will adjust automatically.
+
+            if (myDiagram) {
+                myDiagram.requestUpdate(); // Notify GoJS of size change
+            }
+        }
+
+        function handlePanelsMouseUp() {
+            if (!isResizingPanels) return;
+            isResizingPanels = false;
+            document.removeEventListener('mousemove', handlePanelsMouseMove);
+            document.removeEventListener('mouseup', handlePanelsMouseUp);
+
+            if (myDiagram) {
+                myDiagram.requestUpdate();
+            }
+        }
+
+        function initResizer() {
+            diagramPanel = document.getElementById('myDiagramDiv');
+            resizerElement = document.getElementById('resizer');
+            infoPanel = document.getElementById('infoDiv');
+            containerElement = document.getElementById('diagramContainer');
+
+            if (resizerElement && diagramPanel && infoPanel && containerElement) {
+                resizerElement.addEventListener('mousedown', function(e) {
+                    e.preventDefault();
+                    isResizingPanels = true;
+                    panelsInitialPosX = e.clientX;
+                    panelsInitialDiagramWidth = diagramPanel.offsetWidth;
+
+                    document.addEventListener('mousemove', handlePanelsMouseMove);
+                    document.addEventListener('mouseup', handlePanelsMouseUp);
+                });
+            } else {
+                console.error("Resizer elements not found, cannot initialize resizer.");
+            }
+        }
+
         document.getElementById('showDataButton').addEventListener('click', () => {
             document.getElementById('dataModal').style.display = 'block';
         });
@@ -209,19 +379,21 @@
 
         window.addEventListener('message', event => {
             const message = event.data;
-            console.log("GoJS Display received message: ", message.command);
+            console.log("GoJS Display received message: ", message.command, "Payload:", JSON.stringify(message.payload)); // Enhanced logging
             switch (message.command) {
                 case 'loadGoJsData':
+                    console.log("GoJS Display: 'loadGoJsData' command received. Raw payload.goJsData:", JSON.stringify(message.payload.goJsData));
                     loadDiagramData(message.payload.goJsData);
                     break;
                 // Add other message handlers as needed
             }
         });
 
-        // Initialize the diagram when the script loads
+        // Initialize the diagram and resizer when the script loads
         // Ensure GoJS library is loaded before calling initDiagram
         if (window.go) {
             initDiagram();
+            initResizer(); // Initialize resizer after diagram elements are in DOM
         } else {
             console.error("GoJS library not found. Diagram cannot be initialized.");
             document.getElementById('myDiagramDiv').textContent = 'Error: GoJS library not loaded.';

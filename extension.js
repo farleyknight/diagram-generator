@@ -827,8 +827,10 @@ async function openFileAtLocation(context, relativeFilePath, startLine, endLine)
 // New handler function for 'openGojsDiagramInNewPanel'
 async function handleOpenGojsDiagramInNewPanel(message, context, originalPanel) {
   try {
+    console.log('handleOpenGojsDiagramInNewPanel received message:', JSON.stringify(message, null, 2)); // Added logging for the entire message
     const diagramData = message.payload;
-    if (!diagramData || !diagramData.nodes || !diagramData.links) {
+
+    if (!diagramData || !diagramData.nodeDataArray || !diagramData.linkDataArray) {
       vscode.window.showErrorMessage('Cannot open diagram: Invalid data received.');
       if (originalPanel && originalPanel.webview) {
         originalPanel.webview.postMessage({ command: 'diagramOpenError', payload: 'Invalid data received from source webview.' });
@@ -843,12 +845,28 @@ async function handleOpenGojsDiagramInNewPanel(message, context, originalPanel) 
       {
         enableScripts: true,
         retainContextWhenHidden: true,
-        localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, 'media')] // For future use if loading local scripts/styles
+        localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, 'media')]
       }
     );
 
-    displayPanel.webview.html = getGoJsViewerWebviewContent(context, displayPanel.webview, diagramData);
+    displayPanel.webview.html = getGoJsDisplayWebviewContent(context, displayPanel.webview); // Use gojsDisplay.html
     context.subscriptions.push(displayPanel);
+
+    // Post data to the GoJS display webview once it's ready
+    // gojsDisplay.html needs to send 'gojsDisplayReady' and handle 'loadGoJsData'
+    const gojsDisplayReadyListener = displayPanel.webview.onDidReceiveMessage(
+      displayMessage => {
+        if (displayMessage.command === 'gojsDisplayReady') {
+          displayPanel.webview.postMessage({
+            command: 'loadGoJsData',
+            payload: { goJsData: diagramData } // Send the diagramData, wrapped as goJsData
+          });
+          gojsDisplayReadyListener.dispose(); // Clean up listener
+        }
+      },
+      undefined,
+      context.subscriptions // Add listener to subscriptions for cleanup
+    );
 
     if (originalPanel && originalPanel.webview) {
       originalPanel.webview.postMessage({ command: 'diagramOpenedInNewPanel', payload: 'Diagram panel created.' });
@@ -862,76 +880,6 @@ async function handleOpenGojsDiagramInNewPanel(message, context, originalPanel) 
       originalPanel.webview.postMessage({ command: 'diagramOpenError', payload: `Error creating diagram panel: ${e.message}` });
     }
   }
-}
-
-// New helper function to generate HTML for the GoJS diagram viewer panel
-function getGoJsViewerWebviewContent(context, webview, diagramData) {
-  const gojsCdn = 'https://unpkg.com/gojs@2.3/release/go.js'; // Specify a version
-  const nonce = getNonce(); // Assuming getNonce() function exists
-
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; img-src ${webview.cspSource} data:; script-src 'nonce-${nonce}' ${webview.cspSource} https:;">
-    <title>GoJS Diagram View</title>
-    <script nonce="${nonce}" src="${gojsCdn}"></script>
-    <style>
-        body, html { margin: 0; padding: 0; height: 100%; overflow: hidden; }
-        #myDiagramDiv { width: 100%; height: 100%; border: none; }
-    </style>
-</head>
-<body>
-    <div id="myDiagramDiv"></div>
-    <script nonce="${nonce}">
-        if (typeof go !== 'undefined') {
-            initDiagram();
-        } else {
-            const goJsScriptTag = document.querySelector('script[src="${gojsCdn}"]');
-            if (goJsScriptTag) {
-                goJsScriptTag.onload = initDiagram;
-            } else {
-                document.body.innerText = "Error: GoJS library not found.";
-            }
-        }
-
-        function initDiagram() {
-            try {
-                const $ = go.GraphObject.make;
-                const diagram = $(go.Diagram, "myDiagramDiv", {
-                    initialContentAlignment: go.Spot.Center,
-                    "undoManager.isEnabled": true,
-                    layout: $(go.LayeredDigraphLayout)
-                });
-
-                const nodeDataArray = ${JSON.stringify(diagramData.nodes || [])};
-                const linkDataArray = ${JSON.stringify(diagramData.links || [])};
-                
-                diagram.nodeTemplate =
-                    $(go.Node, "Auto",
-                        $(go.Shape, "RoundedRectangle", { strokeWidth: 0, fill: "lightblue" }),
-                        $(go.TextBlock,
-                            { margin: 8, font: "bold 12px sans-serif" },
-                            new go.Binding("text", "name"))
-                    );
-
-                diagram.linkTemplate =
-                    $(go.Link,
-                        { routing: go.Link.AvoidsNodes, corner: 5 },
-                        $(go.Shape),
-                        $(go.Shape, { toArrow: "Standard" })
-                    );
-                
-                diagram.model = new go.GraphLinksModel(nodeDataArray, linkDataArray);
-            } catch (e) {
-                console.error("Error initializing GoJS diagram:", e);
-                document.getElementById("myDiagramDiv").innerText = "Error initializing GoJS diagram: " + e.message;
-            }
-        }
-    </script>
-</body>
-</html>`;
 }
 
 function deactivate() {}
@@ -949,5 +897,4 @@ module.exports = {
   openFileAtLocation, // Exported for external use
   buildPromptFromSources, // Export new function
   generateMethodId, // Export new function
-  getGoJsViewerWebviewContent // Export new function for GoJS viewer
 };

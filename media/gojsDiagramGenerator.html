@@ -81,7 +81,7 @@
     <textarea id="flattenedCallHierarchyData" style="height:200px;" readonly placeholder="Flattened call hierarchy (nodes and links) will be shown here."></textarea>
     <br><br>
 
-    <button id="openDiagramButton" onclick="openGojsDiagramInNewPanel()">Open Diagram in New Panel</button>
+    <button id="openDiagramButton" onclick="openGojsDiagramInNewPanel()">Open GoJS Diagram in New Panel</button>
     <div id="loadingSpinnerOpenDiagram" class="spinner" style="display:none;"></div>
     <br><br>
 
@@ -194,33 +194,48 @@
             const flattenedDataTextarea = document.getElementById('flattenedCallHierarchyData');
 
             if (!flattenedDataTextarea || !progressStatusDiv || !spinner) {
-                console.error('Required HTML elements not found for opening diagram.');
+                console.error('UI elements missing for opening diagram. flattenedDataTextarea:', flattenedDataTextarea, 'progressStatusDiv:', progressStatusDiv, 'spinner:', spinner);
                 if (progressStatusDiv) progressStatusDiv.textContent = 'Error: UI elements missing for opening diagram.';
                 return;
             }
             
             const jsonDataString = flattenedDataTextarea.value;
+            console.log('[openGojsDiagramInNewPanel] Raw jsonDataString from textarea:', jsonDataString);
+
             if (!jsonDataString.trim()) {
                 progressStatusDiv.textContent = 'No flattened data available to generate diagram.';
+                console.warn('[openGojsDiagramInNewPanel] jsonDataString is empty or whitespace.');
                 if (spinner) spinner.style.display = 'none';
                 return;
             }
 
             try {
                 const diagramData = JSON.parse(jsonDataString);
+                console.log('[openGojsDiagramInNewPanel] Parsed diagramData:', JSON.stringify(diagramData, null, 2));
+
                 if (!diagramData || !diagramData.nodes || !diagramData.links) {
                     progressStatusDiv.textContent = 'Flattened data is not in the expected format (missing nodes or links).';
+                    console.error('[openGojsDiagramInNewPanel] Parsed diagramData is invalid. Missing nodes or links. Data:', JSON.stringify(diagramData, null, 2));
                     if (spinner) spinner.style.display = 'none';
                     return;
                 }
                 spinner.style.display = 'inline-block';
                 progressStatusDiv.textContent = 'Requesting to open diagram in new panel...';
+                
+                const transformedPayload = {
+                    nodeDataArray: diagramData.nodes,
+                    linkDataArray: diagramData.links
+                };
+                console.log('[openGojsDiagramInNewPanel] Transformed payload to be sent:', JSON.stringify(transformedPayload, null, 2));
+
                 vscode.postMessage({
                     command: 'openGojsDiagramInNewPanel',
-                    payload: diagramData
+                    payload: transformedPayload
                 });
+                console.log('[openGojsDiagramInNewPanel] Message posted to extension.');
             } catch (error) {
-                console.error("Error preparing data for new diagram panel:", error);
+                console.error("[openGojsDiagramInNewPanel] Error parsing jsonDataString or preparing/posting message:", error);
+                console.error("[openGojsDiagramInNewPanel] jsonDataString that caused error:", jsonDataString);
                 progressStatusDiv.textContent = 'Error preparing data: ' + error.message;
                 if (spinner) spinner.style.display = 'none';
             }
