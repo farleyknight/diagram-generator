@@ -3,7 +3,7 @@
   "displayName": "Diagram Generator",
   "publisher": "farleyknight",
   "description": "Scan Java files and show links in a Webview",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "engines": {
     "vscode": "^1.99.3"
   },
