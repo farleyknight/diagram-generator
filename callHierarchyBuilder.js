@@ -74,6 +74,11 @@ async function buildHierarchyRecursively(item, workspacePaths, processedItems, p
   let classAnnotations = '';
 
   if (!isExternal && isLocal) {
+    console.log('Processing local item:', item.detail);
+    console.log('Item URI:', item.uri.fsPath);
+    console.log('Item range:', item.range);
+    console.log('Item name:', item.name);
+    console.log('Item detail:', item.detail);
     const className = item.detail?.split('.')?.pop() || '';
     console.log('Fetching class information for:', className);
 
