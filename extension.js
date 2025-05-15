@@ -370,7 +370,10 @@ async function handleOpenFileInEditor(message, context) {
  * @returns {Promise<object|null>} The hierarchy data or null on failure
  */
 async function getCallHierarchyData(uri, position, panel, context) {
+  console.log('getCallHierarchyData called with:', { uri, position });
+
   if (panel && panel.webview && panel.webview.callHierarchyData) {
+    console.log('Reusing existing call hierarchy data.');
     if (panel.webview) {
       panel.webview.postMessage({ command: 'updateProgressStatus', payload: 'Reusing existing call hierarchy data.' });
     }
@@ -381,20 +384,31 @@ async function getCallHierarchyData(uri, position, panel, context) {
     panel.webview.postMessage({ command: 'updateProgressStatus', payload: 'Fetching call hierarchy data...' });
   }
   try {
+    console.log('Preparing call hierarchy...');
     const initialItems = /** @type {vscode.CallHierarchyItem[]} */ (
       await vscode.commands.executeCommand('vscode.prepareCallHierarchy', uri, position)
     );
+    console.log('Initial call hierarchy items:', initialItems);
+
     if (!initialItems || initialItems.length === 0) {
       throw new Error('Could not prepare initial call hierarchy item.');
     }
+
     const rootItem = initialItems[0];
+    console.log('Root item:', rootItem);
+
     const workspaceFolders = vscode.workspace.workspaceFolders;
     if (!workspaceFolders) {
       throw new Error('No workspace folder found.');
     }
+
     const workspacePaths = new Set(workspaceFolders.map(folder => folder.uri.fsPath));
+    console.log('Workspace paths:', workspacePaths);
+
     const processedItems = new Set();
     const callHierarchyData = await buildHierarchyRecursively(rootItem, workspacePaths, processedItems, panel, context);
+    console.log('Built call hierarchy data:', callHierarchyData);
+
     if (panel && panel.webview) {
       panel.webview.callHierarchyData = callHierarchyData; // Cache it
       panel.webview.postMessage({ command: 'updateProgressStatus', payload: 'Call hierarchy data fetched.' });

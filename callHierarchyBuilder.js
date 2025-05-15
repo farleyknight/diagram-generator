@@ -31,9 +31,24 @@ function createFileLinksHtml(uri, context) {
  * @returns {Promise<object>} The hierarchy data for this item
  */
 async function buildHierarchyRecursively(item, workspacePaths, processedItems, panel, context) {
+  console.log('buildHierarchyRecursively called with:', {
+    item: {
+      name: item.name,
+      detail: item.detail,
+      uri: item.uri.fsPath,
+      range: {
+        start: item.range.start,
+        end: item.range.end
+      }
+    },
+    workspacePaths,
+    processedItemsSize: processedItems.size
+  });
+
   const itemId = `${item.uri.fsPath}:${item.range.start.line}:${item.range.start.character}`;
 
   if (processedItems.has(itemId)) {
+    console.log('Item already processed, skipping:', itemId);
     return {
       name: item.name,
       detail: item.detail,
@@ -42,7 +57,7 @@ async function buildHierarchyRecursively(item, workspacePaths, processedItems, p
         endLine: item.range.end.line + 1,
         file: item.uri.fsPath
       },
-      link: createFileLinksHtml(item.uri, context), // Pass context
+      link: createFileLinksHtml(item.uri, context),
       source: '',
       classAnnotations: '',
       reference: "Already processed - cycle detected"
@@ -50,24 +65,21 @@ async function buildHierarchyRecursively(item, workspacePaths, processedItems, p
   }
 
   processedItems.add(itemId);
+  console.log('Processing item:', itemId);
 
   const isLocal = isPathInWorkspace(item.uri.fsPath, workspacePaths);
   const isExternal = !isLocal || isExternalPackage(item.detail);
 
-  // Only get source and class info for local, non-external package files
   let source = '';
   let classAnnotations = '';
 
   if (!isExternal && isLocal) {
-    // Extract the class name from item.detail (format is typically "ClassName.methodName")
-		const className = item.detail?.split('.')?.pop() || '';
+    const className = item.detail?.split('.')?.pop() || '';
+    console.log('Fetching class information for:', className);
 
-
-    // Get class information including annotations
     const classInfo = await getClassInformation(item.uri, className);
     classAnnotations = classInfo.annotations;
 
-    // Get method source
     const document = await vscode.workspace.openTextDocument(item.uri);
     source = document.getText(new vscode.Range(
       item.range.start.line, 0,
@@ -83,7 +95,7 @@ async function buildHierarchyRecursively(item, workspacePaths, processedItems, p
       endLine: item.range.end.line + 1,
       file: item.uri.fsPath
     },
-    link: createFileLinksHtml(item.uri, context), // Pass context
+    link: createFileLinksHtml(item.uri, context),
     source,
     classAnnotations,
     outgoingCalls: []
@@ -96,6 +108,7 @@ async function buildHierarchyRecursively(item, workspacePaths, processedItems, p
   const outgoing = /** @type {vscode.CallHierarchyOutgoingCall[]} */ (await vscode.commands.executeCommand(
     'vscode.provideOutgoingCalls', item
   ));
+  console.log('Outgoing calls for item:', itemId, outgoing);
 
   for (const call of outgoing) {
     const isCallLocal = isPathInWorkspace(call.to.uri.fsPath, workspacePaths);
@@ -105,14 +118,12 @@ async function buildHierarchyRecursively(item, workspacePaths, processedItems, p
     let callClassAnnotations = '';
 
     if (!isCallExternal && isCallLocal) {
-      // Extract the class name from call.to.detail
       const callClassName = call.to.detail?.split('.')?.pop() || '';
+      console.log('Fetching class information for outgoing call:', callClassName);
 
-      // Get class information including annotations
       const classInfo = await getClassInformation(call.to.uri, callClassName);
       callClassAnnotations = classInfo.annotations;
 
-      // Get method source
       const document = await vscode.workspace.openTextDocument(call.to.uri);
       callSource = document.getText(new vscode.Range(
         call.to.range.start.line, 0,
@@ -128,7 +139,7 @@ async function buildHierarchyRecursively(item, workspacePaths, processedItems, p
         endLine: call.to.range.end.line + 1,
         file: call.to.uri.fsPath
       },
-      link: createFileLinksHtml(call.to.uri, context), // Pass context
+      link: createFileLinksHtml(call.to.uri, context),
       source: callSource,
       classAnnotations: callClassAnnotations,
       callSites: call.fromRanges.map(range => ({
@@ -142,6 +153,7 @@ async function buildHierarchyRecursively(item, workspacePaths, processedItems, p
     }
 
     if (!isCallExternal) {
+      console.log('Recursively processing outgoing call:', call.to.name);
       const nestedCalls = await buildHierarchyRecursively(call.to, workspacePaths, processedItems, panel, context);
       if (nestedCalls.outgoingCalls) {
         callData.outgoingCalls = nestedCalls.outgoingCalls;
@@ -151,6 +163,7 @@ async function buildHierarchyRecursively(item, workspacePaths, processedItems, p
     methodData.outgoingCalls.push(callData);
   }
 
+  console.log('Completed processing for item:', itemId);
   return methodData;
 }
 
@@ -284,4 +297,4 @@ module.exports = {
     isPathInWorkspace,
     isExternalPackage,
     getClassInformation
-}; 
+};
