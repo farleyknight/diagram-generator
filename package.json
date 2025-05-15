@@ -5,7 +5,7 @@
   "description": "Scan Java files and show links in a Webview",
   "version": "0.0.4",
   "engines": {
-    "vscode": "1.99.3"
+    "vscode": "1.100.0"
   },
   "main": "extension.js",
   "scripts": {
